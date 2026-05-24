@@ -71,7 +71,9 @@ function getSolverWeight(key) {
    STATE
    production[]: { id, recipeId, rate, locked, optimized }
    rawLimits[]:  { matId, cap }
-   facilityLimits[]: { id, gameFacilityId, name, cap }
+   facilityLimits[]: { id, gameFacilityId, name, cap, integerOnly }
+     integerOnly: when true, all x_ri for this facility are declared as
+     integers in the LP General section (MIP solve).
    powerBatteries[]: { matId, rate }
    prices: { itemId: number }  (persisted separately)
 ═══════════════════════════════════════════════ */
@@ -123,9 +125,10 @@ function _doSave() {
 /* ═══════════════════════════════════════════════
    URL STATE
    Side-pane config is encoded as readable hash params:
-     #t=item:rate,item:rate!&rl=mat:cap&fl=fac:cap&b=mat:rate&as=0&oc=59688
+     #t=item:rate,item:rate!&rl=mat:cap&fl=fac:cap[:i]&b=mat:rate&as=0&oc=59688
    Append ! to a production entry to mark it locked.
-   Append :recipe_id to override the default recipe.
+   Append :recipe_id to a production entry to override the default recipe.
+   Append :i to a facility entry to mark it integer-only (MIP solve).
    Prices live in localStorage only (separate Prices tab).
 ═══════════════════════════════════════════════ */
 let _pendingUrlPrices = null; // localStorage prices deferred past loadPrices()
@@ -150,7 +153,7 @@ function encodeStateToUrl() {
       parts.push('rl=' + rawLimits.map(r => r.matId + ':' + r.cap).join(','));
 
     if (facilityLimits.length)
-      parts.push('fl=' + facilityLimits.map(f => f.gameFacilityId + ':' + f.cap).join(','));
+      parts.push('fl=' + facilityLimits.map(f => f.gameFacilityId + ':' + f.cap + (f.integerOnly ? ':i' : '')).join(','));
 
     if (powerBatteries.length)
       parts.push('b=' + powerBatteries.map(b => b.matId + ':' + _fmtN(b.rate)).join(','));
@@ -198,10 +201,11 @@ function decodeStateFromUrl() {
 
     if (map.fl) {
       facilityLimits = map.fl.split(',').filter(Boolean).map(seg => {
-        const [gfid, cap] = seg.split(':');
+        const parts = seg.split(':');
+        const gfid = parts[0], cap = parts[1], flag = parts[2];
         const ft = facilityTypeById[gfid];
         const parsedCap = parseFloat(cap);
-        return { id: uid(), gameFacilityId: gfid, name: ft?.name || gfid, cap: isNaN(parsedCap) ? 1 : parsedCap };
+        return { id: uid(), gameFacilityId: gfid, name: ft?.name || gfid, cap: isNaN(parsedCap) ? 1 : parsedCap, integerOnly: flag === 'i' };
       }).filter(f => f.gameFacilityId);
     }
 
@@ -434,12 +438,17 @@ function renderFacilities() {
   facilityLimits.forEach((f, fi) => {
     const d = document.createElement('div');
     d.className = 'item-row';
-    d.style.gridTemplateColumns = 'auto 1fr auto auto';
+    d.style.gridTemplateColumns = 'auto 1fr auto auto auto';
     d.style.gap = '0.375rem';
+    const intOn = !!f.integerOnly;
     d.innerHTML = `${facIcon(f.gameFacilityId)}<span class="item-name">${f.name}</span>
       <input class="num-input" type="number" value="${f.cap}" min="0" step="1"
         title="Max units of this facility the LP may use"
         onchange="facilityLimits[${fi}].cap=Math.max(0,+this.value);saveStateNow();recomputeMaxForFacility('${f.gameFacilityId}');renderProducts();if(autoSolveOn())runSolver();else runSolver(false,true)">
+      <label class="tog-wrap" onclick="event.stopPropagation()" title="Integer-only: facility counts are whole numbers">
+        <input type="checkbox" class="tog-cb" ${intOn ? 'checked' : ''} onchange="facilityLimits[${fi}].integerOnly=this.checked;saveStateNow();if(autoSolveOn())runSolver();else runSolver(false,true)">
+        <span class="tog-track"></span>
+      </label>
       <button class="icon-btn del" onclick="delFacLimit(${fi})">✕</button>`;
     el.appendChild(d);
   });
@@ -453,6 +462,7 @@ function delFacLimit(i) {
   renderFacilities(); renderProducts(); saveStateNow();
   if (autoSolveOn()) runSolver(); else runSolver(false, true);
 }
+
 
 function getFacTypePortal() {
   let el = document.getElementById('ft-portal');
@@ -494,7 +504,7 @@ function pickFacType(typeId) {
   closeFacTypeSearch();
   const ft = facilityTypeById[typeId];
   if (!ft || facilityLimits.some(f => f.gameFacilityId === typeId)) return;
-  facilityLimits.push({ id: uid(), name: ft.name || typeId, gameFacilityId: typeId, cap: 1 });
+  facilityLimits.push({ id: uid(), name: ft.name || typeId, gameFacilityId: typeId, cap: 1, integerOnly: false });
   recomputeMaxForFacility(typeId);
   renderFacilities(); renderProducts(); saveStateNow();
   if (autoSolveOn()) runSolver(); else runSolver(false, true);

@@ -34,6 +34,9 @@
  *                    │    ub_net_X  net production ≤ singleMaxRate[X]  (unbounded guard)
  *                    │  Objective: maximise Σ price(X) × net_rate(X) − surplus penalties
  *                    │             − (MACHINE_PENALTY + POWER_WEIGHT × facility_kw) per facility
+ *                    │  Optional MIP: when f.integerOnly is set on a facilityLimit, the
+ *                    │    x_ri for every recipe that uses that facility are added to the
+ *                    │    LP General section → HiGHS solves as MIP, counts are integers
  *                    │
  *     Phase 3 ───────┤  Solve via HiGHS (CPLEX LP text → WebAssembly)
  *                    │
@@ -86,12 +89,17 @@
        optimize:    string,           // objective variable name
        opType:      'max' | 'min',
        constraints: { name: { max|min|equal: number } },
-       variables:   { name: { [constraintOrObj]: coef } }
+       variables:   { name: { [constraintOrObj]: coef } },
+       generals?:   string[]          // optional: variable names declared as integers
      }
 
    compileLP serialises this into CPLEX LP format text;  solveLP runs it
    through HiGHS and returns:
      { feasible: bool, result: number, [varName]: value }
+
+   When generals is non-empty, compileLP appends a "General" section before
+   "End", turning the solve into a MIP.  HiGHS handles both LP and MIP via
+   the same solve() call — no adapter changes needed.
 
    HiGHS is loaded as a WebAssembly module. index.html awaits the WASM
    promise and calls setHighsInstance(solver) to install it. While _highs
@@ -137,6 +145,8 @@ if (window._highsPending) { setHighsInstance(window._highsPending); window._high
 // All variables default to [0, ∞) in CPLEX LP — no Bounds section needed
 // because every variable here is either a facility count (x_ri ≥ 0) or a
 // surplus absorber (surp_X ≥ 0).
+// When model.generals is non-empty, a "General" section is appended so HiGHS
+// treats those variables as integers, turning the problem into a MIP.
 function compileLP(model) {
   const objName    = model.optimize;
   const opType     = (model.opType || 'max').toLowerCase();
@@ -172,7 +182,10 @@ function compileLP(model) {
     else if ('equal' in bound) cLines.push('  ' + cname + ': ' + expr + ' = '  + bound.equal);
   }
 
-  return objKeyword + '\n  obj: ' + objExpr + '\nSubject To\n' + cLines.join('\n') + '\nEnd\n';
+  const generalSection = (model.generals && model.generals.length)
+    ? '\nGeneral\n  ' + model.generals.join('\n  ') + '\n'
+    : '';
+  return objKeyword + '\n  obj: ' + objExpr + '\nSubject To\n' + cLines.join('\n') + generalSection + '\nEnd\n';
 }
 
 // solveLP: run a model through HiGHS and return a flat result map.
@@ -851,6 +864,7 @@ function runSolver(inPlace = false, pinAll = false) {
   const recipeList = [...graph.recipeNodes.values()];
   const constraints = {};
   const variables = {};
+  const generals = []; // x_ri names to declare as integers (MIP); populated by integerOnly facilities
   recipeList.forEach((_, ri) => { variables[`x_${ri}`] = {}; });
 
   // Balance constraints: net_production(item) >= 0 for every non-raw item.
@@ -894,6 +908,14 @@ function runSolver(inPlace = false, pinAll = false) {
       recipeList.forEach((r, ri) => {
         if (r.facilityId === f.gameFacilityId)
           variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) + 1;
+      });
+    });
+
+    // Integer-only: facility counts must be whole numbers for flagged facilities.
+    facilityLimits.forEach(f => {
+      if (!f.integerOnly) return;
+      recipeList.forEach((r, ri) => {
+        if (r.facilityId === f.gameFacilityId) generals.push(`x_${ri}`);
       });
     });
   }
@@ -1012,7 +1034,7 @@ function runSolver(inPlace = false, pinAll = false) {
   // pinAll: minimise total facility count (no profit/bounds needed — just find
   // the minimal feasible solution for the equality-constrained rates).
   if (pinAll) recipeList.forEach((_, ri) => { variables[`x_${ri}`].profit = 1; });
-  const model = { optimize: 'profit', opType: pinAll ? 'min' : 'max', constraints, variables };
+  const model = { optimize: 'profit', opType: pinAll ? 'min' : 'max', constraints, variables, generals };
   let result;
   try { result = solveLP(model); } catch (e) { logS('LP solver error: ' + e, 'err'); return; }
   if (!result?.feasible) {

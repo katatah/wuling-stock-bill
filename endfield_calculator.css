@@ -199,7 +199,7 @@ header.top-nav {
   align-items: flex-start;
   gap: 1rem;
   min-height: calc(100vh - 5rem);
-  padding: 0 1.5rem;
+  padding: 0 1rem;
 }
 
 .side-pane {

@@ -18,6 +18,7 @@ Given:
 - **Raw resource caps** (e.g. 590 Originium Ore/min, 600 Water/min)
 - **Facility caps** (e.g. 12 Forge of the Sky units)
 - Optional **locked/pinned rates** (user pins a target's rate)
+- Optional **integer-only facilities** (facility counts must be whole numbers)
 
 Produce a recipe schedule that maximises total profit (sell price × rate)
 and respects every cap. The schedule comes out as `recipeId → facility count`
@@ -37,8 +38,9 @@ the net-rate display in `computeSummary` after solving.
   production[], rawLimits, facilityLimits
                      │
     Phase 1 ─────────┤  buildBipartiteGraph
-                     │    Step 1 — DFS from each target; pick one recipe per
-                     │             item via selectRecipe
+                     │    Step 1 — DFS from each target; add ALL viable recipes
+                     │             per item (non-dismantle, non-disposal-only).
+                     │             User recipe overrides restrict an item to one.
                      │    Step 2 — Augment: add FD-byproduct recycler recipes
                      │             (e.g. xiranite lowpoly purifier)
                      │    Step 3 — Cycle repair: inject alternate recipe for
@@ -58,8 +60,12 @@ the net-rate display in `computeSummary` after solving.
                      │      max  Σ price(X) · net_rate(X)
                      │         − SURPLUS_PENALTY · Σ surp_X
                      │         − MACHINE_PENALTY · Σ x_ri
+                     │    Optional MIP (integer-only facilities):
+                     │      x_ri for flagged-facility recipes → LP General section
+                     │      HiGHS solves as MIP; counts become whole numbers
                      │
     Phase 3 ─────────┤  Solve via HiGHS (CPLEX LP text → WebAssembly)
+                     │    Pure LP when no generals; MIP when generals non-empty
                      │
     Phase 4 ─────────┤  Extract recipeFacilityCounts from x_ri solution values
                      │
@@ -76,17 +82,19 @@ the net-rate display in `computeSummary` after solving.
 
 ## Solver adapter (HiGHS)
 
-All LP calls go through a small adapter at the top of `solver_pipeline.js`:
+All LP/MIP calls go through a small adapter at the top of `solver_pipeline.js`:
 
 - `compileLP(model)` serialises the internal model object
   `{ optimize, opType, constraints: {name: {max|min|equal}},
-  variables: {name: {[constraintOrObj]: coef}} }`
-  into CPLEX LP text. Variables default to ≥ 0 (no explicit Bounds section —
-  that's correct for facility counts and surplus variables).
+  variables: {name: {[constraintOrObj]: coef}}, generals?: string[] }`
+  into CPLEX LP text. Variables default to ≥ 0 (no explicit Bounds section).
+  When `model.generals` is non-empty, a `General` section is appended before
+  `End`, declaring those variables as integer-valued and turning the solve
+  into a Mixed Integer Program.
 - `solveLP(model)` runs the text through `_highs.solve(...)` and reshapes
-  the result into `{ feasible: bool, result: number, [varName]: value }`,
-  so neither `solveItemMax` nor `runSolver` has to deal with HiGHS' internal
-  return shape.
+  the result into `{ feasible: bool, result: number, [varName]: value }`.
+  HiGHS handles both LP and MIP through the same call — no adapter change
+  needed when switching between continuous and integer mode.
 
 HiGHS is a WebAssembly module. `index.html` awaits `Module({...})` and then
 calls `setHighsInstance(solver)` to install the resolved object. While
@@ -118,10 +126,13 @@ Picks one recipe for an item from a list of candidates. Filter cascade:
 
 Three-step construction:
 
-**Step 1 — DFS.** Starting from each target item, pick one recipe via
-`selectRecipe`, recurse into its inputs. Stop at `forcedRawSet` items or
-dead-end items (no producer in the recipe data — treated as raw).
-`recipeOverrides` lets the user pin a specific recipe for an item.
+**Step 1 — DFS.** Starting from each target item, add ALL viable recipes
+(non-dismantle, non-disposal-only) and recurse into every recipe's inputs.
+User `recipeOverrides` restricts an item to one pinned recipe. Stop at
+`forcedRawSet` items or dead-end items (no producer in the recipe data).
+Multiple recipes per item enter the LP as separate `x_ri` variables; the
+power-weighted penalty in the objective steers the solver toward lower-power
+paths when profit is otherwise equal.
 
 **Step 2 — Augmentation.** Scan all recipes already in the graph. For each
 forced-disposal output of an existing recipe, look up consuming recipes. A
@@ -200,6 +211,33 @@ or facility-ceiling fallback). These constraints prevent the profit objective
 from becoming unbounded when self-sustaining production cycles (e.g. the
 moss/seed loop) exist without any caps. See **Why the LP can go Unbounded**.
 
+### Integer-only facilities (General section / MIP)
+
+When a `facilityLimit` entry has `integerOnly: true`, every `x_ri` for
+recipes that use that facility is added to the LP `General` section:
+
+```
+General
+  x_4
+  x_7
+  ...
+```
+
+This turns the solve into a Mixed Integer Program (MIP). HiGHS's branch-and-
+bound finds an optimal integer solution. The effect: facility counts come out
+as whole numbers (e.g. 4 units on recipe A, 8 on recipe B), matching the
+game's physical unit model. Without this flag, the LP freely assigns
+fractional counts (e.g. 4.7 and 7.3).
+
+The `integerOnly` flag is per-facility, not global. Facilities without it
+remain continuous. The `fac_F` cap constraint is unchanged — it still limits
+the total count across all recipes for that facility.
+
+Note: `solveItemMax` (the mini-LP for `soloMaxRate`) does not receive the
+`generals` list. Upper bounds for integer-only facilities may therefore be
+slightly overestimated, but this only makes `ub_net_X` guards looser — it
+cannot cause incorrect solutions.
+
 ### Profit objective
 
 ```
@@ -247,8 +285,8 @@ global LP but with a single-item objective and no pinned items. If HiGHS
 is not yet loaded, a simpler facility-ceiling fallback is used instead.
 
 Results are memoised in `_maxCache` (keyed by item + recipe + limits
-fingerprint). The persistent `_soloMaxMap` is rebuilt lazily — only when
-`_soloMaxDirty` is true, which is set by `invalidateMaxCache()` whenever
+fingerprint). The persistent `_singleMaxMap` is rebuilt lazily — only when
+`_singleMaxDirty` is true, which is set by `invalidateMaxCache()` whenever
 limits or item list changes. During drag, the map is reused as-is (`solo=0.0ms`
 in the timing log).
 
@@ -297,8 +335,10 @@ item (pure cost) in the summary table and saved-production cards.
 | **Pinned item**               | A fixed item (`p.locked` or `p.id === tempPinnedId`) with rate > 0. Gets an `equal:` constraint. |
 | **x_ri**                      | LP variable: facility count for recipe r. Directly gives `recipeFacilityCounts`.                 |
 | **soloMaxRate[X]**            | Maximum rate of item X if it were the only target given current caps.                            |
-| **calcRate(amt, ct)**         | `amt/ct × 60` — converts "qty per craft" to "qty/min per facility".                              |
+| **calcRate(amt, ct)**         | `amt/ct × 60` — converts "qty per craft" to "qty/min per facility".                             |
 | **surp_X**                    | Surplus variable for zero-price dead-end item X.                                                 |
+| **generals**                  | List of `x_ri` names emitted in the LP `General` section; triggers MIP solve.                   |
+| **integerOnly**               | Flag on a `facilityLimit` entry; forces integer counts for that facility's recipes.              |
 
 ---
 
@@ -343,22 +383,30 @@ null || !isFinite(mx)` — NOT `!mx`. Zero is a valid upper bound (facility
   noise, you'll see phantom non-zero rates. If you loosen it above real
   minimum production rates, you'll accidentally zero out legitimate results.
 
+- **Integer-only and MIP solve time:** adding `generals` turns the LP into a
+  MIP. Branch-and-bound is exponential in the worst case. With few facilities
+  and recipes this is fast, but solve time can grow noticeably when many
+  facilities are flagged. `solveItemMax` (mini-LP for soloMaxRate) does not
+  receive `generals`, so upper bounds for integer facilities may be slightly
+  overestimated — this is harmless (the ub_net guards become looser, not tighter).
+
 ---
 
 ## Where to look for what
 
-| If you want to …                    | Look at                                                     |
-| ----------------------------------- | ----------------------------------------------------------- |
-| Change recipe-pick heuristic        | `selectRecipe` in `solver_pipeline.js`                      |
-| Add a new raw resource              | `rawLimits[]` + `raw_R` constraint loop in `runSolver`      |
-| Add a new facility type             | `facilityLimits[]` + `fac_F` constraint loop in `runSolver` |
-| Debug "why isn't recipe X running?" | Log `recipeFacilityCounts` after Phase 4                    |
-| Debug "why is item X at 0?"         | Check `soloMaxRate[X]`; if 0, a cap is binding              |
-| Verify caps hold                    | Phase 5 sanity check (`rawAndFacilityUsage`)                |
-| Swap the LP solver                  | `compileLP` + `solveLP` in `solver_pipeline.js` § 1         |
-| Change surplus penalty              | `assets/solver_config.js` → `weights.surplus`               |
-| Change machine penalty              | `assets/solver_config.js` → `weights.machine`               |
-| Understand battery display          | `computeSummary` in `endfield_calculator.js`                |
+| If you want to …                         | Look at                                                     |
+| ---------------------------------------- | ----------------------------------------------------------- |
+| Change recipe-pick heuristic             | `selectRecipe` in `solver_pipeline.js`                      |
+| Add a new raw resource                   | `rawLimits[]` + `raw_R` constraint loop in `runSolver`      |
+| Add a new facility type                  | `facilityLimits[]` + `fac_F` constraint loop in `runSolver` |
+| Toggle integer counts for a facility     | `f.integerOnly` on the `facilityLimit` entry (UI toggle or URL `:i` flag) |
+| Debug "why isn't recipe X running?"      | Log `recipeFacilityCounts` after Phase 4                    |
+| Debug "why is item X at 0?"             | Check `soloMaxRate[X]`; if 0, a cap is binding              |
+| Verify caps hold                         | Phase 5 sanity check (`rawAndFacilityUsage`)                |
+| Swap the LP solver                       | `compileLP` + `solveLP` in `solver_pipeline.js` § 1         |
+| Change surplus penalty                   | `assets/solver_config.js` → `weights.surplus`               |
+| Change machine penalty                   | `assets/solver_config.js` → `weights.machine`               |
+| Understand battery display               | `computeSummary` in `endfield_calculator.js`                |
 
 ---
 
