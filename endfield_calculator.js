@@ -12,9 +12,10 @@ const recipeById       = Object.fromEntries(recipesDB.map(r => [r.id, r]));
 const facilityTypeById = Object.fromEntries(gameFacilities.map(f => [f.id, f]));
 const itemById         = Object.fromEntries(itemsDB.map(i => [i.id, i]));
 
-// Index maps for compact base36 URL encoding
-const itemIdxById = new Map(itemsDB.map((it, i) => [it.id, i]));
-const facIdxById  = new Map(gameFacilities.map((f, i) => [f.id, i]));
+// Index maps for compact binary URL encoding
+const itemIdxById   = new Map(itemsDB.map((it, i) => [it.id, i]));
+const facIdxById    = new Map(gameFacilities.map((f, i) => [f.id, i]));
+const recipeIdxById = new Map(recipesDB.map((r, i) => [r.id, i]));
 
 // itemId -> [recipe, ...] that produce it
 const recipesByOutput = (() => {
@@ -139,115 +140,167 @@ let _pendingUrlPrices = null; // localStorage prices deferred past loadPrices()
 
 function _fmtN(n) { return parseFloat(n.toFixed(3)).toString(); }
 
+/* ═══════════════════════════════════════════════
+   URL STATE  — binary + base64url, prefix #v1=
+   Layout (all big-endian, no separators):
+     [flags:1]          bit0=autoSolve  bit1=prioritizeUnsellable
+     [nProd:1][nRl:1][nFl:1][nBat:1]
+     [oc_f32:4]
+     prod × nProd:      [item_u16:2][rate_u24:3][flags:1]  flags:bit0=locked
+     recipe_overrides:  [n:1] then [slot_u8:1][recipe_u16:2] × n
+     rl   × nRl:        [item_u16:2][cap_u16:2]
+     fl   × nFl:        [fac_u8:1][cap_u16:2][flags:1]     flags:bit0=intOnly
+     bat  × nBat:       [item_u16:2][rate_u24:3]
+   item/recipe indices are uint16 (safe up to 65535 entries).
+   Rates stored as uint24 × 1000 (max 16777/min).
+   Caps stored as uint16 (max 65535).
+═══════════════════════════════════════════════ */
+
+function _writeU24(buf, off, val) {
+  const v = Math.round(Math.max(0, val) * 1000) & 0xFFFFFF;
+  buf[off] = (v >> 16) & 0xFF; buf[off+1] = (v >> 8) & 0xFF; buf[off+2] = v & 0xFF;
+}
+function _readU24(buf, off) {
+  return ((buf[off] << 16) | (buf[off+1] << 8) | buf[off+2]) / 1000;
+}
+function _writeU16(buf, off, val) {
+  const v = Math.round(Math.max(0, val)) & 0xFFFF;
+  buf[off] = (v >> 8) & 0xFF; buf[off+1] = v & 0xFF;
+}
+function _readU16(buf, off) { return (buf[off] << 8) | buf[off+1]; }
+
 function encodeStateToUrl() {
   try {
-    const parts = [];
-
-    if (production.length) {
-      parts.push('t=' + production.map(p => {
-        const defRecipe = recipesByOutput[p.id]?.[0]?.id || '';
-        const safeRate = (p.maxRate && isFinite(p.maxRate)) ? Math.min(p.rate, p.maxRate) : p.rate;
-        const key = itemIdxById.get(p.id)?.toString(36) ?? p.id;
-        let s = key + ':' + _fmtN(safeRate);
-        if (p.recipeId && p.recipeId !== defRecipe) s += ':' + p.recipeId;
-        return p.locked ? s + '!' : s;
-      }).join(','));
-    }
-
-    if (rawLimits.length)
-      parts.push('rl=' + rawLimits.map(r => {
-        const key = itemIdxById.get(r.matId)?.toString(36) ?? r.matId;
-        return key + ':' + r.cap;
-      }).join(','));
-
-    if (facilityLimits.length)
-      parts.push('fl=' + facilityLimits.map(f => {
-        const key = facIdxById.get(f.gameFacilityId)?.toString(36) ?? f.gameFacilityId;
-        return key + ':' + f.cap + (f.integerOnly ? ':i' : '');
-      }).join(','));
-
-    if (powerBatteries.length)
-      parts.push('b=' + powerBatteries.map(b => {
-        const key = itemIdxById.get(b.matId)?.toString(36) ?? b.matId;
-        return key + ':' + _fmtN(b.rate);
-      }).join(','));
-
     const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
-    parts.push('as=' + (autoSolve ? '1' : '0'));
-    if (prioritizeUnsellableOn()) parts.push('pu=1');
+    const pu        = prioritizeUnsellableOn();
+    const oc        = parseFloat((document.getElementById('outpost-cost')?.value || '').replace(/,/g, '')) || outpostCostDefault;
 
-    const outpostCost = parseFloat((document.getElementById('outpost-cost')?.value || '').replace(/,/g, '')) || outpostCostDefault;
-    if (outpostCost) parts.push('oc=' + outpostCost);
+    // Collect recipe overrides (non-default recipe selections)
+    const recipeOverrides = [];
+    production.forEach((p, slot) => {
+      const defRecipe = recipesByOutput[p.id]?.[0]?.id || '';
+      if (p.recipeId && p.recipeId !== defRecipe) recipeOverrides.push({ slot, recipeId: p.recipeId });
+    });
 
-    history.replaceState(null, '', parts.length ? '#' + parts.join('&') : location.pathname + location.search);
+    const nProd = production.length, nRl = rawLimits.length;
+    const nFl   = facilityLimits.length, nBat = powerBatteries.length;
+    const nOvr  = recipeOverrides.length;
+
+    const size = 1 + 1 + 1 + 1 + 1 + 4          // flags + counts + oc_f32
+               + nProd * 6                        // prod records
+               + 1 + nOvr * 3                     // recipe overrides
+               + nRl   * 4                        // rl records
+               + nFl   * 4                        // fl records
+               + nBat  * 5;                       // bat records
+
+    const buf = new Uint8Array(size);
+    const dv  = new DataView(buf.buffer);
+    let o = 0;
+
+    buf[o++] = (autoSolve ? 1 : 0) | (pu ? 2 : 0);
+    buf[o++] = nProd; buf[o++] = nRl; buf[o++] = nFl; buf[o++] = nBat;
+    dv.setFloat32(o, oc, false); o += 4;
+
+    production.forEach(p => {
+      const safeRate = (p.maxRate && isFinite(p.maxRate)) ? Math.min(p.rate, p.maxRate) : p.rate;
+      _writeU16(buf, o, itemIdxById.get(p.id) ?? 0xFFFF); o += 2;
+      _writeU24(buf, o, safeRate); o += 3;
+      buf[o++] = p.locked ? 1 : 0;
+    });
+
+    buf[o++] = nOvr;
+    recipeOverrides.forEach(({ slot, recipeId }) => {
+      buf[o++] = slot;
+      _writeU16(buf, o, recipeIdxById.get(recipeId) ?? 0xFFFF); o += 2;
+    });
+
+    rawLimits.forEach(r => {
+      _writeU16(buf, o, itemIdxById.get(r.matId) ?? 0xFFFF); o += 2;
+      _writeU16(buf, o, r.cap); o += 2;
+    });
+
+    facilityLimits.forEach(f => {
+      buf[o++] = facIdxById.get(f.gameFacilityId) ?? 0xFF;
+      _writeU16(buf, o, f.cap); o += 2;
+      buf[o++] = f.integerOnly ? 1 : 0;
+    });
+
+    powerBatteries.forEach(b => {
+      _writeU16(buf, o, itemIdxById.get(b.matId) ?? 0xFFFF); o += 2;
+      _writeU24(buf, o, b.rate); o += 3;
+    });
+
+    const b64 = btoa(String.fromCharCode(...buf)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    history.replaceState(null, '', '#v1=' + b64);
   } catch (e) {}
 }
 
 function decodeStateFromUrl() {
   try {
     const hash = location.hash;
-    if (!hash || hash.length <= 1) return false;
-    const map = {};
-    decodeURIComponent(hash.slice(1)).split('&').forEach(part => {
-      const eq = part.indexOf('=');
-      if (eq >= 0) map[part.slice(0, eq)] = part.slice(eq + 1);
-    });
-    // Require at least one recognised side-pane key (also rejects old #s= base64 URLs)
-    if (!map.t && !map.rl && !map.fl && !map.b && map.as === undefined && !map.oc) return false;
+    if (!hash.startsWith('#v1=')) return false;
+    const b64 = hash.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    const dv = new DataView(buf.buffer);
+    let o = 0;
 
-    // Resolve a token that is either a full item/facility ID or a base36 index
-    function resolveItemId(tok) {
-      return tok.includes('_') ? tok : (itemsDB[parseInt(tok, 36)]?.id ?? tok);
-    }
-    function resolveFacId(tok) {
-      return tok.includes('_') ? tok : (gameFacilities[parseInt(tok, 36)]?.id ?? tok);
-    }
+    const flags = buf[o++];
+    const autoSolve = !!(flags & 1), pu = !!(flags & 2);
+    const nProd = buf[o++], nRl = buf[o++], nFl = buf[o++], nBat = buf[o++];
+    const oc = dv.getFloat32(o, false); o += 4;
 
-    if (map.t) {
-      production = map.t.split(',').filter(Boolean).map(seg => {
-        const locked = seg.endsWith('!');
-        if (locked) seg = seg.slice(0, -1);
-        const f = seg.split(':');                          // [id_or_idx, rate, recipe_id?]
-        const id = resolveItemId(f[0]), rate = parseFloat(f[1]) || 0;
-        const recipeId = f[2] || recipesByOutput[id]?.[0]?.id || '';
-        return { id, recipeId, rate, locked, optimized: false };
-      }).filter(p => itemById[p.id]);
+    production = [];
+    for (let i = 0; i < nProd; i++) {
+      const itemIdx = _readU16(buf, o); o += 2;
+      const rate    = _readU24(buf, o); o += 3;
+      const locked  = !!(buf[o++] & 1);
+      const id      = itemsDB[itemIdx]?.id;
+      if (!id) continue;
+      const recipeId = recipesByOutput[id]?.[0]?.id || '';
+      production.push({ id, recipeId, rate, locked, optimized: false });
     }
 
-    if (map.rl) {
-      rawLimits = map.rl.split(',').filter(Boolean).map(seg => {
-        const [tok, cap] = seg.split(':');
-        return { matId: resolveItemId(tok), cap: parseFloat(cap) || 0 };
-      }).filter(r => r.matId);
+    const nOvr = buf[o++];
+    for (let i = 0; i < nOvr; i++) {
+      const slot      = buf[o++];
+      const recipeIdx = _readU16(buf, o); o += 2;
+      const recipeId  = recipesDB[recipeIdx]?.id;
+      if (production[slot] && recipeId) production[slot].recipeId = recipeId;
     }
 
-    if (map.fl) {
-      facilityLimits = map.fl.split(',').filter(Boolean).map(seg => {
-        const parts = seg.split(':');
-        const gfid = resolveFacId(parts[0]), cap = parts[1], flag = parts[2];
-        const ft = facilityTypeById[gfid];
-        const parsedCap = parseFloat(cap);
-        return { id: uid(), gameFacilityId: gfid, name: ft?.name || gfid, cap: isNaN(parsedCap) ? 1 : parsedCap, integerOnly: flag === 'i' };
-      }).filter(f => f.gameFacilityId);
+    rawLimits = [];
+    for (let i = 0; i < nRl; i++) {
+      const itemIdx = _readU16(buf, o); o += 2;
+      const cap     = _readU16(buf, o); o += 2;
+      const id      = itemsDB[itemIdx]?.id;
+      if (id) rawLimits.push({ matId: id, cap });
     }
 
-    if (map.b) {
-      powerBatteries = map.b.split(',').filter(Boolean).map(seg => {
-        const [tok, rate] = seg.split(':');
-        return { matId: resolveItemId(tok), rate: parseFloat(rate) || 0 };
-      }).filter(b => b.matId);
+    facilityLimits = [];
+    for (let i = 0; i < nFl; i++) {
+      const facIdx    = buf[o++];
+      const cap       = _readU16(buf, o); o += 2;
+      const integerOnly = !!(buf[o++] & 1);
+      const f         = gameFacilities[facIdx];
+      if (!f) continue;
+      facilityLimits.push({ id: uid(), gameFacilityId: f.id, name: f.name, cap, integerOnly });
     }
 
-    if (map.as !== undefined) {
-      const tog = document.getElementById('auto-solve-toggle');
-      if (tog) tog.checked = map.as !== '0';
-    }
-    if (map.pu !== undefined) {
-      const tog = document.getElementById('prioritize-unsellable-toggle');
-      if (tog) tog.checked = map.pu === '1';
+    powerBatteries = [];
+    for (let i = 0; i < nBat; i++) {
+      const itemIdx = _readU16(buf, o); o += 2;
+      const rate    = _readU24(buf, o); o += 3;
+      const id      = itemsDB[itemIdx]?.id;
+      if (id) powerBatteries.push({ matId: id, rate });
     }
 
-    if (map.oc != null) outpostCostDefault = parseFloat(map.oc) || 0;
+    outpostCostDefault = oc;
+    const asTog = document.getElementById('auto-solve-toggle');
+    if (asTog) asTog.checked = autoSolve;
+    const puTog = document.getElementById('prioritize-unsellable-toggle');
+    if (puTog) puTog.checked = pu;
 
     return true;
   } catch (e) { return false; }
