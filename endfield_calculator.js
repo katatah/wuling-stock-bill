@@ -910,6 +910,7 @@ function buildSumTotalRows(totals) {
 
 function renderSummaryTable(netRates, fixedCost) {
   const el = document.getElementById('summary-body');
+  const batRateMap = Object.fromEntries(powerBatteries.map(pb => [pb.matId, pb.rate]));
   const prodIds = new Set(production.map(p => p.id));
   const batOnlyRows = powerBatteries
     .filter(pb => !prodIds.has(pb.matId))
@@ -931,7 +932,11 @@ function renderSummaryTable(netRates, fixedCost) {
       ? `<i data-lucide="lock" class="status-icon" style="color:var(--locked);"></i>`
       : p.optimized ? `<i data-lucide="badge-check" class="status-icon" style="color:var(--positive);"></i>` : '';
     const iconOrPlaceholder = statusIcon || `<span class="status-icon status-icon-placeholder"></span>`;
-    rows.push({ it, ihr, perMinCell: `<span class="per-min-wrap">${iconOrPlaceholder}<span>${net.toFixed(3)}</span></span>` });
+    const batRate = batRateMap[p.id] || 0;
+    const rateSpan = batRate > 0
+      ? `<span>${(p.rate || 0).toFixed(3)}/min</span><span style="color:var(--text3);margin-left:0.3em;">(-${batRate.toFixed(3)}/min)</span>`
+      : `<span>${net.toFixed(3)}</span>`;
+    rows.push({ it, ihr, perMinCell: `<span class="per-min-wrap">${iconOrPlaceholder}${rateSpan}</span>` });
   });
   batOnlyRows.forEach(({ it, net, ihr }) => {
     rows.push({ it, ihr, perMinCell: `<span class="per-min-wrap"><span class="status-icon status-icon-placeholder"></span><span>${net.toFixed(3)}</span></span>` });
@@ -1137,12 +1142,14 @@ function snapshotRowsFromCurrent() {
   const netRates = Object.fromEntries(production.map(p => [p.id, Math.max(0, p.rate || 0)]));
   powerBatteries.forEach(pb => { netRates[pb.matId] = (netRates[pb.matId] || 0) - pb.rate; });
 
+  const batRateMap = Object.fromEntries(powerBatteries.map(pb => [pb.matId, pb.rate]));
   const rows = [];
   production.forEach(p => {
     const net = netRates[p.id] || 0;
     if (Math.abs(net) < 5e-4) return;
     const it = itemById[p.id]; if (!it) return;
-    rows.push({ name: it.name, iconFile: it.iconFile, rate: net, sell: priceOf(p.id), ihr: priceOf(p.id) * net * 60, locked: !!p.locked });
+    const batRate = batRateMap[p.id] || 0;
+    rows.push({ name: it.name, iconFile: it.iconFile, rate: net, grossRate: p.rate || 0, batRate, sell: priceOf(p.id), ihr: priceOf(p.id) * net * 60, locked: !!p.locked });
   });
   // Battery-only rows
   powerBatteries.forEach(pb => {
@@ -1150,7 +1157,7 @@ function snapshotRowsFromCurrent() {
     const it = itemById[pb.matId]; if (!it) return;
     const net = -pb.rate;
     if (Math.abs(net) < 5e-4) return;
-    rows.push({ name: it.name, iconFile: it.iconFile, rate: net, sell: priceOf(pb.matId), ihr: priceOf(pb.matId) * net * 60, locked: false });
+    rows.push({ name: it.name, iconFile: it.iconFile, rate: net, grossRate: 0, batRate: 0, sell: priceOf(pb.matId), ihr: priceOf(pb.matId) * net * 60, locked: false });
   });
   return rows;
 }
@@ -1233,7 +1240,10 @@ function renderSavedTab() {
       const lockMark = r.locked
         ? `<i data-lucide="lock" class="status-icon" style="color:var(--locked);"></i>`
         : `<span class="status-icon status-icon-placeholder"></span>`;
-      return buildSumProductRow(r.iconFile, r.name, `<span class="per-min-wrap">${lockMark}<span>${r.rate.toFixed(3)}</span></span>`, r.sell, r.ihr);
+      const rateSpan = r.batRate > 0
+        ? `<span>${r.grossRate.toFixed(3)}/min</span><span style="color:var(--text3);margin-left:0.3em;">(-${r.batRate.toFixed(3)}/min)</span>`
+        : `<span>${r.rate.toFixed(3)}</span>`;
+      return buildSumProductRow(r.iconFile, r.name, `<span class="per-min-wrap">${lockMark}${rateSpan}</span>`, r.sell, r.ihr);
     }).join('');
     const totals = [
       { label: 'Income', labelStyle: 'color:var(--text2);', valueCls: 'sg-right td-pos', valueHTML: fmt(snap.totalIhr) },
