@@ -438,13 +438,14 @@ function renderFacilities() {
   facilityLimits.forEach((f, fi) => {
     const d = document.createElement('div');
     d.className = 'item-row';
-    d.style.gridTemplateColumns = 'auto 1fr auto auto auto';
+    d.style.gridTemplateColumns = 'auto 1fr auto auto auto auto';
     d.style.gap = '0.375rem';
     const intOn = !!f.integerOnly;
     d.innerHTML = `${facIcon(f.gameFacilityId)}<span class="item-name">${f.name}</span>
       <input class="num-input" type="number" value="${f.cap}" min="0" step="1"
         title="Max units of this facility the LP may use"
         onchange="facilityLimits[${fi}].cap=Math.max(0,+this.value);saveStateNow();recomputeMaxForFacility('${f.gameFacilityId}');renderProducts();if(autoSolveOn())runSolver();else runSolver(false,true)">
+      <span style="font-size:0.75rem;color:var(--text3);font-weight:600;white-space:nowrap;" title="Integer-only: facility counts are whole numbers">ℤ</span>
       <label class="tog-wrap" onclick="event.stopPropagation()" title="Integer-only: facility counts are whole numbers">
         <input type="checkbox" class="tog-cb" ${intOn ? 'checked' : ''} onchange="facilityLimits[${fi}].integerOnly=this.checked;saveStateNow();if(autoSolveOn())runSolver();else runSolver(false,true)">
         <span class="tog-track"></span>
