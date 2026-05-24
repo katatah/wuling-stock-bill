@@ -952,7 +952,7 @@ function renderSummaryTable(netRates, fixedCost) {
   ];
   el.innerHTML = `<div class="sum-grid" style="grid-template-columns:${gridCols}">
     <div class="sg-cell sg-head">Product</div>
-    <div class="sg-cell sg-head">Per minute (net)</div>
+    <div class="sg-cell sg-head">Per minute</div>
     <div class="sg-cell sg-head sg-right">Price</div>
     <div class="sg-cell sg-head sg-right">Bill / hour</div>
     ${rows.map(({ it, ihr, perMinCell }) => buildSumProductRow(it.iconFile, it.name, perMinCell, priceOf(it.id), ihr)).join('')}
@@ -1260,7 +1260,7 @@ function renderSavedTab() {
       </div>
       <div class="sum-grid-scroll"><div class="sum-grid" style="grid-template-columns:${gridCols}">
         <div class="sg-cell sg-head">Product</div>
-        <div class="sg-cell sg-head">Per minute (net)</div>
+        <div class="sg-cell sg-head">Per minute</div>
         <div class="sg-cell sg-head sg-right">Price</div>
         <div class="sg-cell sg-head sg-right">Bill / hour</div>
         ${productRowsHTML}
