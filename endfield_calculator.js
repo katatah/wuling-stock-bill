@@ -1306,6 +1306,7 @@ Promise.all([loadPrices(), loadState()]).then(() => {
   // Apply saved/URL prices after loadPrices() has populated defaults from
   // price.json — ensures user overrides win over the bundled defaults.
   if (_pendingUrlPrices) { Object.assign(prices, _pendingUrlPrices); _pendingUrlPrices = null; }
+  encodeStateToUrl(); // normalize URL to compact base36 format on load
   renderAll();
   // Always run once on load to populate usage bars. When auto-solve is off,
   // use pinAll=true so all rates are treated as fixed — no state is modified.
