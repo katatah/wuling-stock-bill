@@ -934,12 +934,12 @@ function renderSummaryTable(netRates, fixedCost) {
     const iconOrPlaceholder = statusIcon || `<span class="status-icon status-icon-placeholder"></span>`;
     const batRate = batRateMap[p.id] || 0;
     const rateSpan = batRate > 0
-      ? `<span>${(p.rate || 0).toFixed(3)}/min</span><span style="color:var(--text3);margin-left:0.3em;">(-${batRate.toFixed(3)}/min)</span>`
-      : `<span>${net.toFixed(3)}</span>`;
+      ? `<span>${_fmtN(p.rate || 0)}/min</span><span style="color:var(--text3);margin-left:0.3em;">(-${_fmtN(batRate)}/min)</span>`
+      : `<span>${_fmtN(net)}</span>`;
     rows.push({ it, ihr, perMinCell: `<span class="per-min-wrap">${iconOrPlaceholder}${rateSpan}</span>` });
   });
   batOnlyRows.forEach(({ it, net, ihr }) => {
-    rows.push({ it, ihr, perMinCell: `<span class="per-min-wrap"><span class="status-icon status-icon-placeholder"></span><span>${net.toFixed(3)}</span></span>` });
+    rows.push({ it, ihr, perMinCell: `<span class="per-min-wrap"><span class="status-icon status-icon-placeholder"></span><span>${_fmtN(net)}</span></span>` });
   });
   const totalIhr = rows.reduce((s, r) => s + r.ihr, 0);
   const fc = fixedCost != null ? fixedCost : (parseFloat((document.getElementById('outpost-cost')?.value || String(outpostCostDefault)).replace(/,/g,'')) || 0);
@@ -1241,8 +1241,8 @@ function renderSavedTab() {
         ? `<i data-lucide="lock" class="status-icon" style="color:var(--locked);"></i>`
         : `<span class="status-icon status-icon-placeholder"></span>`;
       const rateSpan = r.batRate > 0
-        ? `<span>${r.grossRate.toFixed(3)}/min</span><span style="color:var(--text3);margin-left:0.3em;">(-${r.batRate.toFixed(3)}/min)</span>`
-        : `<span>${r.rate.toFixed(3)}</span>`;
+        ? `<span>${_fmtN(r.grossRate)}/min</span><span style="color:var(--text3);margin-left:0.3em;">(-${_fmtN(r.batRate)}/min)</span>`
+        : `<span>${_fmtN(r.rate)}</span>`;
       return buildSumProductRow(r.iconFile, r.name, `<span class="per-min-wrap">${lockMark}${rateSpan}</span>`, r.sell, r.ihr);
     }).join('');
     const totals = [
