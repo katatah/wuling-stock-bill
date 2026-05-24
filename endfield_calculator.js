@@ -932,8 +932,9 @@ function renderUsageBars(ru) {
   const FAC_COLORS = ['#60a5fa','#f97316','#4ade80','#f87171','#a78bfa','#facc15','#34d399','#fb7185','#38bdf8','#c084fc'];
 
   // Build full facility usage from the last solve: load and segments per facility type.
-  const facLoad = {};   // gameFacilityId → total units used
-  const facSegs = {};   // gameFacilityId → [{it, contrib, rate}]
+  const facLoad    = {};   // gameFacilityId → total LP units used
+  const facSegs    = {};   // gameFacilityId → [{it, contrib, rate}]
+  const facRecipes = {};   // gameFacilityId → [{scaledFc, buffers}]
   if (_lastGraph && _lastFacilityCounts) {
     const getScale = getSolvedScale();
     _lastFacilityCounts.forEach((fc, rid) => {
@@ -947,8 +948,34 @@ function renderUsageBars(ru) {
       const mainOut = (r.outputs || [])[0];
       const it = mainOut ? itemById[mainOut.itemId] : null;
       facSegs[fid].push({ it, contrib: scaledFc, rate: calcRate((mainOut?.amount || 1), r.craftingTime) * scaledFc });
+      if (!facRecipes[fid]) facRecipes[fid] = [];
+      facRecipes[fid].push({ scaledFc, buffers: recipeById[rid]?.buffers || [] });
     });
   }
+
+  // Bin-packing: compute physical pool count for facilities with cacheSlots > 1.
+  const facPhysical = {};  // gameFacilityId → physical unit count
+  Object.keys(facRecipes).forEach(fid => {
+    const cacheSlots = facilityTypeById[fid]?.cacheSlots ?? 1;
+    if (cacheSlots <= 1) return;
+    const sorted = facRecipes[fid].slice().sort((a, b) => b.buffers.length - a.buffers.length);
+    const bins = []; // [{buffers: Set, count: number}]
+    for (const rec of sorted) {
+      const recBuf = new Set(rec.buffers);
+      let placed = false;
+      for (const bin of bins) {
+        const unionSize = new Set([...bin.buffers, ...recBuf]).size;
+        if (unionSize <= cacheSlots) {
+          for (const b of recBuf) bin.buffers.add(b);
+          bin.count = Math.max(bin.count, rec.scaledFc);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) bins.push({ buffers: recBuf, count: rec.scaledFc });
+    }
+    facPhysical[fid] = bins.reduce((s, b) => s + b.count, 0);
+  });
 
   // Collect all raw IDs to show: limits + anything actually consumed.
   const rawCapMap = Object.fromEntries(rawLimits.map(rl => [rl.matId, rl.cap]));
@@ -996,20 +1023,21 @@ function renderUsageBars(ru) {
   if (allFacIds.size) {
     html += '<div class="fac-grid">';
     allFacIds.forEach(fid => {
-      const load    = Math.round((facLoad[fid] || 0) * 100) / 100;
-      const f       = facLimitMap[fid];
-      const cap     = f?.cap;
-      const hasCap  = cap != null;
-      const facName = f?.name || facilityTypeById[fid]?.name || fid;
-      const over    = hasCap && load > cap;
+      const load     = Math.round((facLoad[fid] || 0) * 100) / 100;
+      const physical = Math.round((facPhysical[fid] ?? facLoad[fid] ?? load) * 100) / 100;
+      const f        = facLimitMap[fid];
+      const cap      = f?.cap;
+      const hasCap   = cap != null;
+      const facName  = f?.name || facilityTypeById[fid]?.name || fid;
+      const over     = hasCap && load > cap;
       const totalPct = hasCap ? Math.min(100, (load / (cap || 1)) * 100) : 100;
       const segments = facSegs[fid] || [];
-      const denominator = hasCap ? cap : (load || 1);
+      const denominator = hasCap ? cap : (load || 1);  // always LP units
       const segHtml = segments.map((s, si) =>
         `<div class="fac-seg" style="width:${((s.contrib / denominator) * 100).toFixed(2)}%;background:${FAC_COLORS[si % FAC_COLORS.length]};" data-tip="${s.it?.name || '?'}: ${s.rate.toFixed(1)}/min · ${s.contrib.toFixed(2)}u" data-icon="${s.it?.iconFile || ''}"></div>`
       ).join('');
       const emptyPct = hasCap ? (100 - totalPct).toFixed(2) : '0';
-      const countText = hasCap ? `${load.toFixed(2)} / ${cap}u` : `${load.toFixed(2)}u`;
+      const countText = hasCap ? `${physical.toFixed(2)} / ${cap}u` : `${physical.toFixed(2)}u`;
       html += `<div class="fac-card">
         <div class="fac-card-header">
           ${facIcon(fid)}
