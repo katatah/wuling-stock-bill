@@ -12,6 +12,10 @@ const recipeById       = Object.fromEntries(recipesDB.map(r => [r.id, r]));
 const facilityTypeById = Object.fromEntries(gameFacilities.map(f => [f.id, f]));
 const itemById         = Object.fromEntries(itemsDB.map(i => [i.id, i]));
 
+// Index maps for compact base36 URL encoding
+const itemIdxById = new Map(itemsDB.map((it, i) => [it.id, i]));
+const facIdxById  = new Map(gameFacilities.map((f, i) => [f.id, i]));
+
 // itemId -> [recipe, ...] that produce it
 const recipesByOutput = (() => {
   const m = {};
@@ -133,7 +137,7 @@ function _doSave() {
 ═══════════════════════════════════════════════ */
 let _pendingUrlPrices = null; // localStorage prices deferred past loadPrices()
 
-function _fmtN(n) { return parseFloat(n.toFixed(6)).toString(); }
+function _fmtN(n) { return parseFloat(n.toFixed(3)).toString(); }
 
 function encodeStateToUrl() {
   try {
@@ -143,20 +147,30 @@ function encodeStateToUrl() {
       parts.push('t=' + production.map(p => {
         const defRecipe = recipesByOutput[p.id]?.[0]?.id || '';
         const safeRate = (p.maxRate && isFinite(p.maxRate)) ? Math.min(p.rate, p.maxRate) : p.rate;
-        let s = p.id + ':' + _fmtN(safeRate);
+        const key = itemIdxById.get(p.id)?.toString(36) ?? p.id;
+        let s = key + ':' + _fmtN(safeRate);
         if (p.recipeId && p.recipeId !== defRecipe) s += ':' + p.recipeId;
         return p.locked ? s + '!' : s;
       }).join(','));
     }
 
     if (rawLimits.length)
-      parts.push('rl=' + rawLimits.map(r => r.matId + ':' + r.cap).join(','));
+      parts.push('rl=' + rawLimits.map(r => {
+        const key = itemIdxById.get(r.matId)?.toString(36) ?? r.matId;
+        return key + ':' + r.cap;
+      }).join(','));
 
     if (facilityLimits.length)
-      parts.push('fl=' + facilityLimits.map(f => f.gameFacilityId + ':' + f.cap + (f.integerOnly ? ':i' : '')).join(','));
+      parts.push('fl=' + facilityLimits.map(f => {
+        const key = facIdxById.get(f.gameFacilityId)?.toString(36) ?? f.gameFacilityId;
+        return key + ':' + f.cap + (f.integerOnly ? ':i' : '');
+      }).join(','));
 
     if (powerBatteries.length)
-      parts.push('b=' + powerBatteries.map(b => b.matId + ':' + _fmtN(b.rate)).join(','));
+      parts.push('b=' + powerBatteries.map(b => {
+        const key = itemIdxById.get(b.matId)?.toString(36) ?? b.matId;
+        return key + ':' + _fmtN(b.rate);
+      }).join(','));
 
     const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
     parts.push('as=' + (autoSolve ? '1' : '0'));
@@ -181,12 +195,20 @@ function decodeStateFromUrl() {
     // Require at least one recognised side-pane key (also rejects old #s= base64 URLs)
     if (!map.t && !map.rl && !map.fl && !map.b && map.as === undefined && !map.oc) return false;
 
+    // Resolve a token that is either a full item/facility ID or a base36 index
+    function resolveItemId(tok) {
+      return tok.includes('_') ? tok : (itemsDB[parseInt(tok, 36)]?.id ?? tok);
+    }
+    function resolveFacId(tok) {
+      return tok.includes('_') ? tok : (gameFacilities[parseInt(tok, 36)]?.id ?? tok);
+    }
+
     if (map.t) {
       production = map.t.split(',').filter(Boolean).map(seg => {
         const locked = seg.endsWith('!');
         if (locked) seg = seg.slice(0, -1);
-        const f = seg.split(':');                          // [item_id, rate, recipe_id?]
-        const id = f[0], rate = parseFloat(f[1]) || 0;
+        const f = seg.split(':');                          // [id_or_idx, rate, recipe_id?]
+        const id = resolveItemId(f[0]), rate = parseFloat(f[1]) || 0;
         const recipeId = f[2] || recipesByOutput[id]?.[0]?.id || '';
         return { id, recipeId, rate, locked, optimized: false };
       }).filter(p => itemById[p.id]);
@@ -194,15 +216,15 @@ function decodeStateFromUrl() {
 
     if (map.rl) {
       rawLimits = map.rl.split(',').filter(Boolean).map(seg => {
-        const [id, cap] = seg.split(':');
-        return { matId: id, cap: parseFloat(cap) || 0 };
+        const [tok, cap] = seg.split(':');
+        return { matId: resolveItemId(tok), cap: parseFloat(cap) || 0 };
       }).filter(r => r.matId);
     }
 
     if (map.fl) {
       facilityLimits = map.fl.split(',').filter(Boolean).map(seg => {
         const parts = seg.split(':');
-        const gfid = parts[0], cap = parts[1], flag = parts[2];
+        const gfid = resolveFacId(parts[0]), cap = parts[1], flag = parts[2];
         const ft = facilityTypeById[gfid];
         const parsedCap = parseFloat(cap);
         return { id: uid(), gameFacilityId: gfid, name: ft?.name || gfid, cap: isNaN(parsedCap) ? 1 : parsedCap, integerOnly: flag === 'i' };
@@ -211,8 +233,8 @@ function decodeStateFromUrl() {
 
     if (map.b) {
       powerBatteries = map.b.split(',').filter(Boolean).map(seg => {
-        const [id, rate] = seg.split(':');
-        return { matId: id, rate: parseFloat(rate) || 0 };
+        const [tok, rate] = seg.split(':');
+        return { matId: resolveItemId(tok), rate: parseFloat(rate) || 0 };
       }).filter(b => b.matId);
     }
 
