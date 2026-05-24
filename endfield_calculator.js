@@ -934,7 +934,7 @@ function renderSummaryTable(netRates, fixedCost) {
     const iconOrPlaceholder = statusIcon || `<span class="status-icon status-icon-placeholder"></span>`;
     const batRate = batRateMap[p.id] || 0;
     const rateSpan = batRate > 0
-      ? `<span>${_fmtN(p.rate || 0)}/min</span><span style="color:var(--text3);margin-left:0.3em;">(-${_fmtN(batRate)}/min)</span>`
+      ? `<span>${_fmtN(p.rate || 0)}</span><span style="color:var(--text3);margin-left:0.3em;">(-${_fmtN(batRate)})</span>`
       : `<span>${_fmtN(net)}</span>`;
     rows.push({ it, ihr, perMinCell: `<span class="per-min-wrap">${iconOrPlaceholder}${rateSpan}</span>` });
   });
@@ -1241,7 +1241,7 @@ function renderSavedTab() {
         ? `<i data-lucide="lock" class="status-icon" style="color:var(--locked);"></i>`
         : `<span class="status-icon status-icon-placeholder"></span>`;
       const rateSpan = r.batRate > 0
-        ? `<span>${_fmtN(r.grossRate)}/min</span><span style="color:var(--text3);margin-left:0.3em;">(-${_fmtN(r.batRate)}/min)</span>`
+        ? `<span>${_fmtN(r.grossRate)}</span><span style="color:var(--text3);margin-left:0.3em;">(-${_fmtN(r.batRate)})</span>`
         : `<span>${_fmtN(r.rate)}</span>`;
       return buildSumProductRow(r.iconFile, r.name, `<span class="per-min-wrap">${lockMark}${rateSpan}</span>`, r.sell, r.ihr);
     }).join('');
