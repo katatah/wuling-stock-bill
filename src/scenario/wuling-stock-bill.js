@@ -1,0 +1,66 @@
+globalThis.WULING_STOCK_BILL_SCENARIO = {
+  id: "wuling-stock-bill",
+  title: "Wuling Stock Bill",
+  maxBillsPerHour: 59688,
+  tradeItems: [
+    { itemId: "item_proc_battery_5", price: 54, defaultTarget: true },
+    { itemId: "item_copper_enr_cmpt", price: 48, defaultTarget: true },
+    { itemId: "item_xiranite_enr_powder", price: 27, defaultTarget: true },
+    { itemId: "item_proc_battery_4", price: 25, defaultTarget: true },
+    { itemId: "item_bottled_rec_hp_5", price: 22, defaultTarget: true },
+    { itemId: "item_bottled_food_5", price: 22, defaultTarget: false },
+    { itemId: "item_bottled_rec_hp_4", price: 16, defaultTarget: true },
+    { itemId: "item_bottled_food_4", price: 16, defaultTarget: false },
+    { itemId: "item_xiranite_powder", price: 1, defaultTarget: true },
+    { itemId: "item_copper_cmpt", price: 1, defaultTarget: true },
+  ],
+  constrainedResources: [
+    { itemId: "item_originium_ore", defaultCap: 540 },
+    { itemId: "item_iron_ore", defaultCap: 90 },
+    { itemId: "item_copper_ore", defaultCap: 240 },
+  ],
+  constrainedFacilities: [
+    { facilityId: "xiranite_oven_1", defaultCap: 12, integerOnly: false },
+  ],
+  resourceBoosts: [
+    { itemId: "item_originium_ore", amount: 50 },
+    { itemId: "item_iron_ore", amount: 25 },
+  ],
+  deductions: [
+    { itemId: "item_proc_battery_5", defaultRate: 3 },
+    { itemId: "item_proc_battery_4", defaultRate: 0 },
+    { itemId: "item_equip_script_4", defaultRate: 0.6 },
+    { itemId: "item_equip_script_4_1", defaultRate: 0.6 },
+    { itemId: "item_equip_script_4_2", defaultRate: 0.3 },
+  ],
+  defaultState: {
+    production: [
+      { id: "item_proc_battery_5", recipeId: "tools_proc_battery_5_1", rate: 14.75, locked: false, optimized: true, maxRate: 14.75 },
+      { id: "item_copper_enr_cmpt", recipeId: "component_copper_enr_cmpt_1", rate: 3.25, locked: false, optimized: true, maxRate: 6 },
+      { id: "item_xiranite_enr_powder", recipeId: "xiranite_oven_xiranite_enr_powder_1", rate: 12.97, locked: false, optimized: true, maxRate: 19.23 },
+      { id: "item_proc_battery_4", recipeId: "tools_proc_battery_4_1", rate: 0, locked: false, optimized: true, maxRate: 19.67 },
+      { id: "item_bottled_rec_hp_5", recipeId: "tools_proc_rec_hp_5_1", rate: 5.5, locked: false, optimized: true, maxRate: 12 },
+      { id: "item_bottled_rec_hp_4", recipeId: "tools_proc_rec_hp_4_1", rate: 0, locked: false, optimized: true, maxRate: 4.5 },
+      { id: "item_xiranite_powder", recipeId: "xiranite_oven_xiranite_powder_1", rate: 0, locked: false, optimized: true, maxRate: 360 },
+      { id: "item_copper_cmpt", recipeId: "component_copper_cmpt_1", rate: 0, locked: false, optimized: true, maxRate: 0 },
+    ],
+    rawLimits: [
+      { matId: "item_originium_ore", cap: 540 },
+      { matId: "item_iron_ore", cap: 90 },
+      { matId: "item_copper_ore", cap: 240 },
+    ],
+    facilityLimits: [
+      { id: "forge-of-the-sky", gameFacilityId: "xiranite_oven_1", name: "Forge of the Sky", cap: 12, integerOnly: false },
+    ],
+    powerBatteries: [
+      { matId: "item_proc_battery_5", rate: 3 },
+      { matId: "item_equip_script_4", rate: 0.6 },
+      { matId: "item_equip_script_4_1", rate: 0.6 },
+      { matId: "item_equip_script_4_2", rate: 0.3 },
+    ],
+    prices: {},
+    autoSolve: true,
+    prioritizeUnsellable: false,
+    outpostCost: 59688,
+  },
+};

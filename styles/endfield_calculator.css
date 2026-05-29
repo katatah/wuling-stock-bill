@@ -45,6 +45,15 @@
 input[type=number]::-webkit-inner-spin-button,
 input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 input[type=number] { -moz-appearance: textfield; font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace; font-variant-numeric: tabular-nums; }
+input[type=number].with-stepper {
+  -moz-appearance: textfield;
+  padding-right: 1.15rem;
+}
+input[type=number].with-stepper::-webkit-inner-spin-button,
+input[type=number].with-stepper::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
 
 html { font-size: 18px; }
 
@@ -61,7 +70,7 @@ body::before {
   position: fixed;
   inset: 0;
   z-index: -1;
-  background: url('assets/background.png') center / cover;
+  background: url('../assets/background.png') center / cover;
   filter: blur(3px);
   transform: scale(1.03);
 }
@@ -168,6 +177,28 @@ header.top-nav {
   margin-left: auto;
 }
 
+.locale-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+  color: var(--text3);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+
+.locale-switch select {
+  min-width: 6.75rem;
+  height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: rgba(9, 9, 11, 0.92);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0 1.75rem 0 0.625rem;
+}
+
 .tab {
   padding: 0.3125rem 0.875rem;
   font-size: 0.75rem;
@@ -217,12 +248,70 @@ header.top-nav {
   overflow-y: auto;
   max-height: 100vh;
   padding-bottom: 1.25rem;
+  max-width: 22rem;
+  opacity: 1;
+  transition: flex-basis 0.24s ease, max-width 0.24s ease, opacity 0.18s ease, transform 0.24s ease;
 }
 /* prevent flex from squashing panels — side-pane scrolls instead */
 .side-pane > * { flex-shrink: 0; }
 
 /* DESKTOP — user hid the side pane via the toggle */
-.app.side-collapsed .side-pane { display: none; }
+.app.side-collapsed .side-pane {
+  flex-basis: 0;
+  max-width: 0;
+  width: 0;
+  padding-right: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateX(-0.75rem);
+}
+
+.side-rail-toggle {
+  align-items: center;
+  background: linear-gradient(180deg, var(--bg-panel), rgba(9, 9, 11, 0.96));
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0 0.875rem 0.875rem 0;
+  box-shadow: 10px 0 24px rgba(0, 0, 0, 0.22);
+  color: var(--text2);
+  cursor: pointer;
+  display: none;
+  flex-direction: column;
+  gap: 0.45rem;
+  height: 9.5rem;
+  justify-content: center;
+  left: 0;
+  letter-spacing: 0;
+  padding: 0.75rem 0.35rem;
+  position: fixed;
+  top: 6rem;
+  transition: border-color 0.15s ease, color 0.15s ease, transform 0.18s ease;
+  width: 2.35rem;
+  z-index: 35;
+}
+
+.side-rail-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateX(0.125rem);
+}
+
+.side-rail-toggle svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+.side-rail-toggle span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  writing-mode: vertical-rl;
+}
+
+.app.side-collapsed .side-rail-toggle {
+  display: inline-flex;
+}
 
 /* main body area: flex-1 sibling of side-pane that centers content and shrinks without overlapping */
 .body-area {
@@ -235,9 +324,37 @@ header.top-nav {
   align-items: safe center;
   gap: 0.75rem;
 }
+
+.page-layout > .body-area {
+  align-items: stretch;
+}
 /* let wraps shrink below their content's min-content so the inner scrollable
    container (.sum-grid-scroll) handles the overflow with its own thin scrollbar */
 .body-area > * { min-width: 0; }
+
+.wuling-detail-pane {
+  background: rgba(9, 9, 11, 0.92);
+  border-left: 1px solid var(--border);
+  bottom: 0;
+  box-shadow: -18px 0 38px rgba(0, 0, 0, 0.34);
+  overflow-y: auto;
+  padding: 1rem;
+  position: fixed;
+  right: 0;
+  top: 0;
+  transform: translateX(100%);
+  transition: transform 0.24s ease;
+  width: min(50rem, 55vw);
+  z-index: 45;
+}
+
+.app.detail-open .wuling-detail-pane {
+  transform: translateX(0);
+}
+
+.app.detail-open #page-main .body-area {
+  max-width: none;
+}
 
 /* low-profile horizontal scroll for the production summary grid when the grid
    can't shrink any further. Used on both main tab (#summary-body) and saved cards. */
@@ -405,6 +522,16 @@ header.top-nav {
 }
 .item-name.fac-item { color: var(--facility); }
 
+.raw-boost-badge {
+  color: var(--positive);
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 800;
+  min-width: 1.65rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* PRODUCTION CARD GRID */
 .prod-grid {
   display: grid;
@@ -488,10 +615,72 @@ header.top-nav {
   padding: 0.1875rem 0.375rem;
   text-align: center;
   outline: none;
-  transition: border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
   width: 4rem;
 }
-.num-input:focus { border-color: var(--accent); }
+.num-input:hover {
+  background: var(--bg4);
+  border-color: var(--border2);
+}
+.num-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(223, 209, 20, 0.18);
+}
+
+.stepper-field {
+  display: inline-grid;
+  position: relative;
+  width: 4rem;
+}
+
+.stepper-field .num-input,
+.stepper-field .fac-num-input {
+  width: 100%;
+}
+
+.stepper-buttons {
+  bottom: 2px;
+  display: grid;
+  gap: 1px;
+  pointer-events: none;
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 0.9rem;
+}
+
+.stepper-buttons button {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.055);
+  border: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text3);
+  cursor: pointer;
+  display: flex;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace;
+  font-size: 0.54rem;
+  font-weight: 900;
+  justify-content: center;
+  line-height: 1;
+  min-height: 0;
+  padding: 0;
+  pointer-events: auto;
+}
+
+.stepper-buttons button:first-child {
+  border-radius: 0 0.18rem 0 0;
+}
+
+.stepper-buttons button:last-child {
+  border-radius: 0 0 0.18rem 0;
+}
+
+.stepper-buttons button:hover,
+.stepper-buttons button:focus-visible {
+  background: rgba(223, 209, 20, 0.16);
+  color: var(--accent);
+  outline: none;
+}
 
 .locked-display {
   font-size: 0.75rem;
@@ -612,6 +801,33 @@ header.top-nav {
   font-size: 0.625rem;
   color: var(--text2);
   white-space: nowrap;
+}
+.prod-option-boost {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.prod-option-boost span {
+  color: var(--text2);
+  font-size: 0.625rem;
+  font-weight: 700;
+}
+.prod-option-boost select {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.65rem;
+  font-weight: 700;
+  max-width: 8.5rem;
+  min-width: 0;
+  padding: 0.18rem 0.32rem;
+}
+.prod-option-boost select:focus {
+  border-color: var(--accent);
+  outline: none;
 }
 .add-row {
   display: flex;
@@ -763,6 +979,16 @@ header.top-nav {
   overflow: hidden;
 }
 .summary-wrap { width: 100%; }
+
+.wuling-candidate-wrap {
+  flex: 1 1 auto;
+  max-width: 58rem !important;
+  width: min(100%, 58rem);
+}
+
+.legacy-summary-wrap {
+  display: none;
+}
 
 /* SUMMARY FIXED COLUMN METRICS (kept in sync with renderSummaryTable JS) */
 :root {
@@ -1100,8 +1326,16 @@ tr:hover td { background: rgba(255,255,255,.02); }
   padding: var(--input-py-num) var(--input-px);
   text-align: center;
   outline: none;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
 }
-.fac-num-input:focus { border-color: var(--border2); }
+.fac-num-input:hover {
+  background: var(--bg4);
+  border-color: var(--text3);
+}
+.fac-num-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(223, 209, 20, 0.18);
+}
 
 /* FACILITY ASSIGNED PRODUCTS */
 .fac-assigned-list { display: flex; flex-direction: column; margin-bottom: 0.25rem; }
@@ -1390,6 +1624,43 @@ tr:hover td { background: rgba(255,255,255,.02); }
 
 #price-config-list.result-table-wrap { padding: 0.25rem 0.625rem; }
 
+.recipe-config-wrap {
+  margin-top: 0.75rem;
+  padding: 0;
+}
+
+.recipe-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0.875rem;
+  border-top: 1px solid var(--line);
+}
+
+.recipe-toggle-main {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.recipe-toggle-main strong,
+.recipe-toggle-main small {
+  display: block;
+}
+
+.recipe-toggle-main strong {
+  font-size: 0.875rem;
+  color: var(--text);
+}
+
+.recipe-toggle-main small {
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  color: var(--text3);
+}
+
 #mat-config-list {
   /* sits directly on --bg, already dark */
 }
@@ -1475,6 +1746,7 @@ tr:hover td { background: rgba(255,255,255,.02); }
   /* toggle slides the pane in */
   .app.side-mobile-open .side-pane { transform: translateX(0); }
   .app.side-mobile-open .side-backdrop { display: block; }
+  .side-rail-toggle { display: none !important; }
 
   /* body-area fills full width — side-pane is no longer in the flow */
   .page-layout { display: block; }
@@ -1501,6 +1773,8 @@ tr:hover td { background: rgba(255,255,255,.02); }
   .header-text { display: none; }
   .tabs { margin-left: auto; padding: 0.125rem; gap: 0; }
   .tab { padding: 0.25rem 0.5rem; font-size: 0.6875rem; }
+  .locale-switch span { display: none; }
+  .locale-switch select { min-width: 4.75rem; height: 1.875rem; font-size: 0.6875rem; }
 
   /* tighter dimensions for the shorter mobile header */
   .side-pane {

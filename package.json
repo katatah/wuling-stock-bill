@@ -1,0 +1,11 @@
+{
+  "name": "wuling-stock-bill",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/i18n.js && node --check src/catalog-labels.js && node --check src/endfield_calculator.js && node --check src/solver_pipeline.js && node --check src/scenario/wuling-stock-bill.js && node --check src/scenario/state.js && node --check src/scenario/candidate-policies.js && node --check src/scenario/deductions.js && node --check src/scenario/snapshot.js && node --check src/scenario/solver-kernel.js && node --check src/scenario/solver-service.js && node --check src/scenario/solution-summary.js && node --check src/scenario/candidate-buildability.js && node --check src/scenario/candidate-neighborhood.js && node --check src/scenario/candidate-engine.js && node --check src/scenario/candidate-apply.js && node --check src/ui/production.js && node --check src/ui/candidate.js && node --check src/ui/candidate-controller.js && node --check src/ui/detail-helpers.js && node --check src/ui/detail-export.js && node --check src/ui/detail.js && node --check tools/static-server.mjs",
+    "test": "node --test",
+    "serve": "node tools/static-server.mjs"
+  }
+}

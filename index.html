@@ -3,26 +3,30 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Endfield Production Solver</title>
+<title>Wuling Stock Bill Guide</title>
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Endfield Production Solver">
-<meta property="og:title" content="Endfield Production Solver">
-<meta property="og:description" content="An LP-based production optimizer for Arknights: Endfield. Set targets, resource limits, and facility caps — the solver finds the optimal mix.">
-<meta property="og:url" content="https://hikarin-dev.github.io/aic-solver/">
-<meta property="og:image" content="https://hikarin-dev.github.io/aic-solver/assets/logo.webp">
+<meta property="og:site_name" content="Wuling Stock Bill Guide">
+<meta property="og:title" content="Wuling Stock Bill Guide">
+<meta property="og:description" content="A Wuling Stock Bill planning helper for Arknights: Endfield. Compare practical production candidates, resource limits, boosts, and deductions.">
+<meta property="og:url" content="./">
+<meta property="og:image" content="assets/wuling-stock-bill.png">
 <meta name="theme-color" content="#1a1a2e">
-<link rel="icon" type="image/x-icon" href="assets/logo.ico">
-<link rel="icon" type="image/webp" href="assets/logo.webp">
+<link rel="icon" type="image/png" href="assets/wuling-stock-bill.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="endfield_calculator.css">
+<link rel="stylesheet" href="styles/endfield_calculator.css">
+<link rel="stylesheet" href="styles/production.css">
+<link rel="stylesheet" href="styles/candidate.css">
+<link rel="stylesheet" href="styles/detail.css">
+<script src="src/i18n.js"></script>
+<script src="src/catalog-labels.js"></script>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 <!-- HiGHS (WebAssembly LP solver). The script tag defines a global
      `Module` factory; we invoke it to load the WASM and stash the
      resolved solver instance via setHighsInstance() so runSolver's
-     adapter (compileLP + solveLP in solver_pipeline.js) can use it. -->
+     adapter (compileLP + solveLP in src/solver_pipeline.js) can use it. -->
 <script src="https://cdn.jsdelivr.net/npm/highs@latest/build/highs.js"></script>
 <script>
   (function () {
@@ -41,16 +45,23 @@
 
   <!-- TOP NAV -->
   <header class="top-nav">
-    <button class="side-toggle" onclick="toggleSidePane()" title="Toggle side panel" aria-label="Toggle side panel">
+    <button class="side-toggle" onclick="toggleSidePane()" title="Toggle side panel" aria-label="Toggle side panel" data-i18n-title="button.toggleSidePanel" data-i18n-aria-label="button.toggleSidePanel">
       <i data-lucide="menu"></i>
     </button>
-    <a href="./" class="logo-hex" style="text-decoration:none;"><img src="assets/logo.webp" alt="logo" style="width:100%;height:100%;object-fit:contain;"></a>
-    <a href="./" class="header-text" style="text-decoration:none;"><h1>Endfield Production Solver</h1></a>
+    <a href="./" class="logo-hex" style="text-decoration:none;"><img src="assets/wuling-stock-bill.png" alt="Wuling Stock Bill Guide" style="width:100%;height:100%;object-fit:contain;"></a>
+    <a href="./" class="header-text" style="text-decoration:none;"><h1 data-i18n="app.title">Wuling Stock Bill Guide</h1></a>
     <div class="tabs">
-      <button class="tab active" data-tab="main" onclick="switchTab('main')">Setup &amp; Solver</button>
-      <button class="tab" data-tab="prices" onclick="switchTab('prices')">Prices</button>
-      <button class="tab" data-tab="saved" onclick="switchTab('saved')">Saved Productions</button>
+      <button class="tab active" data-tab="main" onclick="switchTab('main')" data-i18n="nav.main">Setup &amp; Solver</button>
+      <button class="tab" data-tab="prices" onclick="switchTab('prices')" data-i18n="nav.prices">Prices &amp; Recipes</button>
     </div>
+    <label class="locale-switch" title="Language" data-i18n-title="language.label">
+      <span data-i18n="language.label">Language</span>
+      <select id="locale-select" aria-label="Language" data-i18n-aria-label="language.label" onchange="globalThis.WulingI18n?.setLocale?.(this.value)">
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="zh-CN">简体中文</option>
+      </select>
+    </label>
   </header>
 
   <div class="side-backdrop" onclick="toggleSidePane()"></div>
@@ -64,19 +75,23 @@
       <div class="panel" id="panel-prod">
         <div class="panel-head" onclick="togglePanel('panel-prod')">
           <span style="display:flex;align-items:center;gap:0.25rem;">
-            <span class="panel-title">Production</span>
+            <span class="panel-title" data-i18n="panel.production">Production</span>
             <span class="pill" id="prod-pill">0</span>
           </span>
           <label class="tog-wrap" title="Auto-solve on any change" style="margin-left:auto;margin-right:0.25rem;" onclick="event.stopPropagation()">
-            <span style="font-size:0.625rem;color:var(--text2);margin-right:0.375rem;white-space:nowrap;">Auto-solve</span>
+            <span style="font-size:0.625rem;color:var(--text2);margin-right:0.375rem;white-space:nowrap;" data-i18n="production.autoSolve">Auto-solve</span>
             <input type="checkbox" class="tog-cb" id="auto-solve-toggle" checked onchange="tempPinnedId=null;saveState(); if(autoSolveOn()) runSolver(); else renderProducts()">
             <span class="tog-track"></span>
           </label>
-          <button class="collapse-btn" title="Collapse"><span class="chevron">▼</span></button>
+          <button class="collapse-btn" title="Collapse" data-i18n-title="button.collapse"><span class="chevron">▼</span></button>
         </div>
         <div class="panel-body">
           <div class="prod-options-row">
-            <span class="prod-option-label" style="margin-left:auto">Prioritize Unsellable</span>
+            <label class="prod-option-boost" title="Metastorage Transfer">
+              <span data-i18n="production.transfer">Transfer</span>
+              <select id="resource-boost-select" onchange="setSelectedResourceBoost(this.value)"></select>
+            </label>
+            <span class="prod-option-label" style="margin-left:auto" data-i18n="production.prioritizeUnsellable">Prioritize Unsellable</span>
             <label class="tog-wrap" onclick="event.stopPropagation()" title="Maximise production of zero-price items before optimising profit">
               <input type="checkbox" class="tog-cb" id="prioritize-unsellable-toggle" onchange="tempPinnedId=null;saveState();if(autoSolveOn())runSolver();else runSolver(false,true)">
               <span class="tog-track"></span>
@@ -85,7 +100,8 @@
           <div id="prod-list"></div>
           <div class="add-row">
             <div class="mat-search-wrap" style="flex:1;min-width:160px;">
-              <input type="text" id="new-prod-input" class="mat-search-input" placeholder="Add production target…"
+              <input type="text" id="new-prod-input" class="mat-search-input" placeholder="Add production target..."
+                data-i18n-placeholder="placeholder.addProductionTarget"
                 autocomplete="off" oninput="filterProdSearch()" onfocus="filterProdSearch()">
             </div>
           </div>
@@ -95,7 +111,7 @@
       <!-- RAW RESOURCE LIMITS -->
       <div class="panel" id="panel-res">
         <div class="panel-head" onclick="togglePanel('panel-res')">
-          <span class="panel-title">Raw Resource Limits</span>
+          <span class="panel-title" data-i18n="panel.rawResourceLimits">Raw Resource Limits</span>
           <span class="pill" id="res-pill">0</span>
           <button class="collapse-btn" title="Collapse"><span class="chevron">▼</span></button>
         </div>
@@ -103,7 +119,8 @@
           <div id="res-list"></div>
           <div class="add-row">
             <div class="mat-search-wrap" style="flex:1;min-width:160px;">
-              <input type="text" id="new-raw-input" class="mat-search-input" placeholder="Add raw resource limit…"
+              <input type="text" id="new-raw-input" class="mat-search-input" placeholder="Add raw resource limit..."
+                data-i18n-placeholder="placeholder.addRawResourceLimit"
                 autocomplete="off" oninput="filterRawSearch()" onfocus="filterRawSearch()">
             </div>
           </div>
@@ -113,7 +130,7 @@
       <!-- FACILITY LIMITS -->
       <div class="panel" id="panel-fac">
         <div class="panel-head" onclick="togglePanel('panel-fac')">
-          <span class="panel-title purple">Facility Limits</span>
+          <span class="panel-title purple" data-i18n="panel.facilityLimits">Facility Limits</span>
           <span class="pill purple" id="fac-pill">0</span>
           <button class="collapse-btn" title="Collapse"><span class="chevron">▼</span></button>
         </div>
@@ -121,17 +138,18 @@
           <div id="fac-list"></div>
           <div class="add-row">
             <div class="mat-search-wrap" style="flex:1;min-width:160px;">
-              <input type="text" id="new-fac-name" class="mat-search-input" placeholder="Add facility limit…"
+              <input type="text" id="new-fac-name" class="mat-search-input" placeholder="Add facility limit..."
+                data-i18n-placeholder="placeholder.addFacilityLimit"
                 autocomplete="off" oninput="filterFacTypeSearch()" onfocus="filterFacTypeSearch()">
             </div>
           </div>
         </div>
       </div>
 
-      <!-- POWER CONSUMPTION -->
+      <!-- DEDUCTIONS -->
       <div class="panel" id="panel-opt">
         <div class="panel-head" onclick="togglePanel('panel-opt')">
-          <span class="panel-title">Power Consumption</span>
+          <span class="panel-title" data-i18n="panel.deductions">Deductions</span>
           <button class="collapse-btn" title="Collapse"><span class="chevron">▼</span></button>
         </div>
         <div class="panel-body">
@@ -139,7 +157,8 @@
             <div id="power-bat-list"></div>
             <div style="display:flex;gap:5px;margin-top:5px;align-items:center;">
               <div class="mat-search-wrap" style="flex:1;min-width:0;">
-                <input type="text" id="power-bat-input" class="mat-search-input" placeholder="Add battery…"
+                <input type="text" id="power-bat-input" class="mat-search-input" placeholder="Add deduction..."
+                  data-i18n-placeholder="placeholder.addDeduction"
                   autocomplete="off" oninput="filterBatSearch()" onfocus="filterBatSearch()">
               </div>
             </div>
@@ -151,20 +170,30 @@
       <div id="solver-log"></div>
 
     </aside>
+    <button class="side-rail-toggle" type="button" onclick="toggleSidePane()" title="Show production panel" aria-label="Show production panel" data-i18n-title="button.showProductionPanel" data-i18n-aria-label="button.showProductionPanel">
+      <i data-lucide="panel-left-open"></i>
+      <span data-i18n="panel.production">Production</span>
+    </button>
 
     <main class="body-area">
-      <div class="result-table-wrap summary-wrap">
-        <div class="panel-head" style="background:var(--accent);">
-          <span class="panel-title" style="color:var(--accent-fg);">Production Summary</span>
-        </div>
-        <div id="summary-body" class="sum-grid-scroll"><div class="empty-state">No products added yet</div></div>
+      <div class="result-table-wrap summary-wrap wuling-candidate-wrap">
+        <div id="wuling-candidate-root" class="panel-body"></div>
       </div>
-      <div class="result-table-wrap summary-wrap">
-        <div class="panel-head"><span class="panel-title">Resource &amp; Facility Usage</span></div>
-        <div class="panel-body" id="usage-bars"><div class="empty-state">Add raw resource or facility limits to see usage</div></div>
+      <div class="result-table-wrap summary-wrap legacy-summary-wrap">
+        <div class="panel-head" style="background:var(--accent);">
+          <span class="panel-title" style="color:var(--accent-fg);" data-i18n="panel.productionSummary">Production Summary</span>
+        </div>
+        <div id="summary-body" class="sum-grid-scroll"><div class="empty-state" data-i18n="empty.noProducts">No products added yet</div></div>
+      </div>
+      <div class="result-table-wrap summary-wrap legacy-summary-wrap">
+        <div class="panel-head"><span class="panel-title" data-i18n="panel.resourceFacilityUsage">Resource &amp; Facility Usage</span></div>
+        <div class="panel-body" id="usage-bars"><div class="empty-state" data-i18n="empty.usage">Add raw resource or facility limits to see usage</div></div>
       </div>
     </main>
    </div>
+   <aside class="wuling-detail-pane">
+     <div id="wuling-detail-root" class="panel-body"></div>
+   </aside>
   </div>
 
   <!-- SAVED PRODUCTIONS TAB -->
@@ -182,37 +211,61 @@
   <div id="page-prices" class="page">
     <main class="body-area standalone materials-area">
       <div class="mat-page-head">
-        <span class="panel-title">Item Prices</span>
-        <span style="font-size:11px;color:var(--text3);">Set sell price per item — used by the LP objective</span>
+        <span class="panel-title" data-i18n="nav.prices">Prices &amp; Recipes</span>
+        <span style="font-size:11px;color:var(--text3);" data-i18n="prices.subtitle">Set sell price per item - used by the LP objective</span>
         <div class="mat-search-wrap">
-          <input type="text" id="price-search-input" class="mat-search-input" placeholder="Search items…"
+          <input type="text" id="price-search-input" class="mat-search-input" placeholder="Search items..."
+            data-i18n-placeholder="placeholder.searchItems"
             autocomplete="off" oninput="filterPriceSearch()" onfocus="filterPriceSearch()">
           <div id="price-search-dropdown" class="mat-search-dropdown"></div>
         </div>
       </div>
-      <div id="price-config-list" class="result-table-wrap"><div class="empty-state">Search for items above to set their sell price</div></div>
+      <div id="price-config-list" class="result-table-wrap"><div class="empty-state" data-i18n="empty.prices">Search for items above to set their sell price</div></div>
+      <div class="result-table-wrap recipe-config-wrap">
+        <div class="panel-head"><span class="panel-title" data-i18n="panel.recipes">Recipes</span></div>
+        <div id="recipe-config-list" class="panel-body"></div>
+      </div>
     </main>
   </div>
 
   <footer class="app-footer">
-    <span class="footer-item">Arknights: Endfield is a trademark of Hypergryph. This tool is not affiliated with or endorsed by Hypergryph.</span>
-    <a href="https://github.com/hikarin-dev/aic-solver" target="_blank" rel="noopener noreferrer" class="footer-item footer-link footer-github"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg></a>
+    <span class="footer-item" data-i18n="footer.disclaimer">Arknights: Endfield is a trademark of Hypergryph. This tool is not affiliated with or endorsed by Hypergryph.</span>
+    <a href="https://github.com/katatah/wuling-stock-bill" target="_blank" rel="noopener noreferrer" class="footer-item footer-link footer-github"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg></a>
     <span class="footer-sep">·</span>
-    <span class="footer-item">v0.0.1</span>
+    <span class="footer-item">v0.1.0</span>
     <span class="footer-sep">·</span>
-    <span class="footer-item"><i data-lucide="scale"></i> MIT License</span>
+    <span class="footer-item"><i data-lucide="scale"></i> <span data-i18n="footer.license">MIT License</span></span>
   </footer>
 
 </div><!-- /app -->
 
 <script src="assets/solver_config.js"></script>
-<script src="solver_pipeline.js"></script>
+<script src="src/scenario/wuling-stock-bill.js"></script>
+<script src="src/scenario/state.js"></script>
+<script src="src/scenario/candidate-policies.js"></script>
+<script src="src/scenario/deductions.js"></script>
+<script src="src/scenario/snapshot.js"></script>
+<script src="src/scenario/solver-kernel.js"></script>
+<script src="src/scenario/solver-service.js"></script>
+<script src="src/scenario/solution-summary.js"></script>
+<script src="src/scenario/candidate-buildability.js"></script>
+<script src="src/scenario/candidate-neighborhood.js"></script>
+<script src="src/scenario/candidate-engine.js"></script>
+<script src="src/scenario/candidate-apply.js"></script>
+<script src="src/ui/production.js"></script>
+<script src="src/ui/candidate.js"></script>
+<script src="src/ui/candidate-controller.js"></script>
+<script src="src/ui/detail-helpers.js"></script>
+<script src="src/ui/detail-export.js"></script>
+<script src="src/ui/detail.js"></script>
+<script src="src/solver_pipeline.js"></script>
 <script>
 (async function () {
   const [items, recipes] = await Promise.all([
     fetch('assets/items.json').then(r => r.json()),
     fetch('assets/recipes.json').then(r => r.json()),
   ]);
+  await globalThis.WulingCatalogLabels?.load?.();
   const bl = new Set(window.SOLVER_CONFIG?.blacklist || []);
   window.ITEMS_DB   = bl.size ? items.filter(i => !bl.has(i.id)) : items;
   window.RECIPES_DB = bl.size ? {
@@ -224,7 +277,7 @@
 
   await new Promise(function (resolve, reject) {
     var s = document.createElement('script');
-    s.src = 'endfield_calculator.js'; s.onload = resolve; s.onerror = reject;
+    s.src = 'src/endfield_calculator.js'; s.onload = resolve; s.onerror = reject;
     document.head.appendChild(s);
   });
   lucide.createIcons();

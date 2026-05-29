@@ -1,0 +1,20 @@
+.wuling-production-view {
+  min-width: 0;
+}
+
+.wuling-view-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.wuling-view-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.wuling-view-head span {
+  color: var(--text2);
+  font-size: 0.75rem;
+}

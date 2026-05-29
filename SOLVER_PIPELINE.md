@@ -1,8 +1,11 @@
 # Production Solver Pipeline
 
 This document describes the current solver architecture in
-[solver_pipeline.js](solver_pipeline.js) (as of the single-LP rewrite).
-`runSolver` in that file is the entry point.
+[src/solver_pipeline.js](src/solver_pipeline.js) (as of the single-LP rewrite).
+`solveProductionModel` is the solve boundary. It can solve the current app
+state or a cloned `{ context }` object. The LP model builder reads production,
+limits, prices, and policy flags from that explicit context. `runSolver` is now
+a legacy UI wrapper that applies the result to the current screen.
 
 If you only have time for one section, read **The end-to-end flow**.
 If you're modifying the solver, read **Graph construction**, **Why the LP can
@@ -32,7 +35,7 @@ the net-rate display in `computeSummary` after solving.
 
 ## The end-to-end flow
 
-`runSolver` is six phases (look for the `─── Phase N ───` banners in the source):
+`solveProductionModel` is six phases:
 
 ```
   production[], rawLimits, facilityLimits
@@ -53,6 +56,7 @@ the net-rate display in `computeSummary` after solving.
                      │    Constraints:
                      │      bal_X      Σ net_production(X) ≥ 0
                      │                 (= pinnedRate for pinned items)
+                     │                 (= 0 for forced-disposal fluids)
                      │      raw_R      Σ raw consumption ≤ rawCap
                      │      fac_F      Σ facility counts ≤ facCap
                      │      ub_net_X   net_production(X) ≤ soloMaxRate[X]
@@ -71,11 +75,15 @@ the net-rate display in `computeSummary` after solving.
                      │
     Phase 5 ─────────┤  Sanity check — abort if any cap exceeded by > 0.5
                      │
-    Phase 6 ─────────┤  Apply results
-                     │    Snap LP residuals < 1e-3 to 0
-                     │    Write p.rate for non-fixed items
-                     │    Cache _lastGraph / _lastFacilityCounts
-                     │    computeSummary() + render
+                    Phase 6 ─────────┤  Return results
+                     │    recipeFacilityCounts
+                     │    netRates
+                     │    rawUse / facUse
+                     │    timing metadata
+
+`runSolver` calls `solveProductionModel`, then applies the result to the
+legacy screen by writing `p.rate`, caching `_lastGraph` /
+`_lastFacilityCounts`, and rendering summary/usage UI.
 ```
 
 ---
@@ -139,12 +147,19 @@ forced-disposal output of an existing recipe, look up consuming recipes. A
 consuming recipe is added if:
 
 - All its inputs are forced-disposal (`isDisposalOnlyRecipe`).
-- It produces at least one item already in the graph.
+- It produces at least one item already in the graph, or it is a zero-output
+  treatment sink.
 
 This brings in recycler recipes like `liquid_purifier_xiranite_poly_1` that
 convert waste `lxp_lowpoly` back to useful `lxp`. The all-FD-input guard is
 critical — without it, alternate normal producers would be included and break
 the LP's balance equations.
+
+Zero-output sinks matter for wastewater. If a recipe produces sewage and no
+recycler can use all of it, the remaining sewage should appear as Water
+Treatment Unit usage. Adding treatment sinks to the graph gives the LP a real
+facility path for that excess instead of letting it disappear into a generic
+surplus absorber.
 
 **Step 3 — Cycle repair.** Compute which items are reachable forward from raw
 materials through the current recipes. Any item not yet reachable (trapped in a
@@ -188,6 +203,13 @@ For every non-raw item X:
 If item X is pinned (locked or `tempPinnedId`), the bound becomes `= pinnedRate`
 instead of `≥ 0`. Fixed items at rate ≈ 0 are excluded from pinning so the LP
 treats them as free.
+
+Forced-disposal fluids that are not production targets use `= 0` instead of
+`≥ 0`. This is intentional: sewage, inert Xircon effluent, and Xircon effluent
+may be byproducts, but leftover fluid still needs a recipe path such as a
+recycler or Water Treatment Unit. If these rows were left as `≥ 0`, the LP could
+keep positive net sewage as harmless mathematical surplus, and the detail panel
+would under-report facility usage.
 
 ### Raw/facility caps (raw_R, fac_F)
 
@@ -259,6 +281,7 @@ A dead-end item is one that is:
 - Not a production target
 - Not priced
 - Not consumed by any recipe in the graph
+- Not a forced-disposal fluid that must be treated
 
 For each such item, the balance constraint is promoted from `≥ 0` to `= 0`,
 and a `surp_X` variable absorbs any over-production:
@@ -330,7 +353,7 @@ item (pure cost) in the summary table and saved-production cards.
 | ----------------------------- | ------------------------------------------------------------------------------------------------ |
 | **Target**                    | An item with a user-requested rate. Lives in `production[]`.                                     |
 | **Recipe**                    | Game recipe: `{ id, facilityId, craftingTime, inputs[], outputs[] }`.                            |
-| **FD item / forced-disposal** | Item in `forcedDisposalSet` (e.g. sewage, lxp_lowpoly). Free to over-produce.                    |
+| **FD item / forced-disposal** | Item in `forcedDisposalSet` (e.g. sewage, lxp_lowpoly). Free byproduct that must be recycled or treated. |
 | **Raw material**              | Item in `forcedRawSet` (e.g. ore, water). Unlimited supply, capped only by `rawLimits[]`.        |
 | **Pinned item**               | A fixed item (`p.locked` or `p.id === tempPinnedId`) with rate > 0. Gets an `equal:` constraint. |
 | **x_ri**                      | LP variable: facility count for recipe r. Directly gives `recipeFacilityCounts`.                 |
@@ -348,14 +371,16 @@ item (pure cost) in the summary table and saved-production cards.
 sewage, lxp_lowpoly, lxp. The pipeline treats them as:
 
 - Not charged as raw costs (they come from other recipes for free).
-- Not subject to the surplus-variable penalty (they're expected to be over-produced).
 - Starting points for the augmentation pass (their consumers may be recycler recipes).
+- Requiring explicit consumption when they are produced, unless the user is
+  directly targeting that item.
 
 What FD does NOT mean:
 
 - The item is never consumed. lxp is FD but Heavy Xiranite needs it.
-- You can skip producing it. Within the LP, balance still holds; the LP just
-  doesn't penalise over-production.
+- The solver may leave it as invisible surplus. Any leftover sewage/effluent
+  should flow through a recycler or a zero-output treatment sink so facility
+  usage remains visible.
 
 ---
 

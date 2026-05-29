@@ -1,0 +1,252 @@
+.wuling-candidate-view {
+  min-width: 0;
+}
+
+.wuling-candidate-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.45rem;
+  margin-left: auto;
+}
+
+.wuling-candidate-actions span {
+  color: var(--text2);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.wuling-candidate-table {
+  display: grid;
+  gap: 0.18rem;
+  margin-top: 0.55rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+
+.wuling-candidate-head,
+.wuling-candidate-row {
+  display: grid;
+  grid-template-columns: var(--candidate-grid);
+  align-items: center;
+  gap: 0.14rem;
+  min-width: max-content;
+}
+
+.wuling-candidate-head {
+  color: var(--text2);
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 0 0.38rem;
+  text-transform: uppercase;
+}
+
+.candidate-gap-target-head {
+  align-items: center;
+  display: flex;
+  gap: 0.15rem;
+  justify-content: flex-end;
+}
+
+.candidate-gap-target-prefix {
+  color: var(--text2);
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+
+.candidate-gap-target-head input {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--accent);
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace;
+  font-size: 0.66rem;
+  font-weight: 900;
+  max-width: 3.25rem;
+  padding: 0.1rem 0.14rem;
+  text-align: right;
+}
+
+.candidate-gap-target-head input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.wuling-candidate-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(15, 15, 17, 0.86);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  min-height: 2.25rem;
+  padding: 0.34rem 0.24rem;
+  text-align: left;
+}
+
+.wuling-candidate-row:hover {
+  border-color: var(--border2);
+  background: rgba(24, 24, 27, 0.92);
+}
+
+.wuling-candidate-row.is-selected {
+  border-color: var(--accent);
+  background: linear-gradient(90deg, rgba(223, 209, 20, 0.18), rgba(15, 15, 17, 0.92));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.candidate-marker-cell {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.candidate-bills {
+  display: grid;
+  line-height: 1;
+  min-width: 0;
+}
+
+.candidate-production-mark {
+  color: var(--accent);
+  display: inline-block;
+  font-size: 0.74rem;
+  font-style: normal;
+  line-height: 1;
+  text-shadow: 0 0 0.45rem rgba(223, 209, 20, 0.46);
+  transform: translateY(-0.01rem);
+}
+
+.candidate-bills strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.candidate-bills small {
+  color: var(--text2);
+  font-size: 0.6rem;
+}
+
+.candidate-gap {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.candidate-gap.is-positive {
+  color: var(--positive);
+}
+
+.candidate-gap.is-negative {
+  color: var(--negative);
+}
+
+.candidate-icon-head {
+  align-items: center;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.candidate-boost-head {
+  align-items: center;
+  color: var(--text3);
+  display: flex;
+  justify-content: center;
+  letter-spacing: 0;
+  padding-left: 0.15rem;
+}
+
+.candidate-icon-head .mat-icon {
+  height: 1.25rem;
+  width: 1.25rem;
+}
+
+.candidate-output,
+.candidate-resource,
+.candidate-boost {
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.candidate-output {
+  display: grid;
+  line-height: 1.05;
+}
+
+.candidate-output strong {
+  color: inherit;
+}
+
+.candidate-output small {
+  font-size: 0.55rem;
+  font-weight: 900;
+}
+
+.candidate-output small.is-negative {
+  color: var(--negative);
+}
+
+.candidate-output small.is-positive {
+  color: var(--positive);
+}
+
+.candidate-output.is-zero {
+  color: var(--text3);
+}
+
+.candidate-resource {
+  display: grid;
+  line-height: 1.05;
+}
+
+.candidate-resource strong {
+  color: inherit;
+}
+
+.candidate-resource small {
+  color: var(--text3);
+  font-size: 0.56rem;
+}
+
+.candidate-resource.is-over {
+  color: var(--danger);
+}
+
+.candidate-resource.is-under {
+  color: var(--accent);
+}
+
+.candidate-boost {
+  align-items: center;
+  color: var(--text2);
+  display: inline-flex;
+  gap: 0.22rem;
+  justify-content: flex-end;
+}
+
+.candidate-boost strong {
+  color: var(--text2);
+}
+
+.candidate-boost .mat-icon {
+  height: 0.95rem;
+  width: 0.95rem;
+}
+
+.candidate-boost.is-empty {
+  color: var(--text3);
+  display: block;
+}
+
+.wuling-candidate-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text2);
+  font-size: 0.76rem;
+  margin-top: 0.55rem;
+  padding: 0.75rem;
+}

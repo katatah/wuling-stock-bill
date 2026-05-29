@@ -12,6 +12,28 @@ const recipeById       = Object.fromEntries(recipesDB.map(r => [r.id, r]));
 const facilityTypeById = Object.fromEntries(gameFacilities.map(f => [f.id, f]));
 const itemById         = Object.fromEntries(itemsDB.map(i => [i.id, i]));
 
+function itemDisplayName(entryOrId) {
+  const item = typeof entryOrId === 'string' ? itemById[entryOrId] : entryOrId;
+  const fallback = item?.name || (typeof entryOrId === 'string' ? entryOrId : '');
+  return window.WulingCatalogLabels?.itemName?.(item || entryOrId, fallback) || fallback;
+}
+
+function itemSearchText(entryOrId) {
+  const item = typeof entryOrId === 'string' ? itemById[entryOrId] : entryOrId;
+  return window.WulingCatalogLabels?.itemSearchText?.(item || entryOrId, item?.name || '') || itemDisplayName(item || entryOrId).toLowerCase();
+}
+
+function facilityDisplayName(entryOrId) {
+  const facility = typeof entryOrId === 'string' ? facilityTypeById[entryOrId] : entryOrId;
+  const fallback = facility?.name || (typeof entryOrId === 'string' ? entryOrId : '');
+  return window.WulingCatalogLabels?.facilityName?.(facility || entryOrId, fallback) || fallback;
+}
+
+function facilitySearchText(entryOrId) {
+  const facility = typeof entryOrId === 'string' ? facilityTypeById[entryOrId] : entryOrId;
+  return window.WulingCatalogLabels?.facilitySearchText?.(facility || entryOrId, facility?.name || '') || facilityDisplayName(facility || entryOrId).toLowerCase();
+}
+
 // Index maps for compact base36 URL encoding
 const itemIdxById = new Map(itemsDB.map((it, i) => [it.id, i]));
 const facIdxById  = new Map(gameFacilities.map((f, i) => [f.id, i]));
@@ -63,6 +85,8 @@ async function loadPrices() {
       });
     }
   } catch (e) {}
+  const scenarioPrices = globalThis.WulingScenarioState?.scenarioPrices?.(globalThis.WULING_STOCK_BILL_SCENARIO);
+  if (scenarioPrices) Object.assign(prices, scenarioPrices);
 }
 function priceOf(id) { return prices[id] ?? 0; }
 
@@ -90,6 +114,8 @@ let outpostCostDefault = 59688;
 let _lastChangedProdId = null;  // item last touched by the user
 let _infeasibleProdId  = null;  // item to highlight red on LP infeasible
 let _prodSortable      = null;  // SortableJS instance for the production list
+let _mainRefreshNeeded = false;
+let _mainMaxRefreshNeeded = false;
 
 const RAW_DEFAULT_CAPS = {
   'item_originium_ore': 590,
@@ -97,6 +123,89 @@ const RAW_DEFAULT_CAPS = {
   'item_quartz_sand':   240,
   'item_copper_ore':    240,
 };
+
+let selectedResourceBoostId = '';
+let recipeOptions = {
+  usePurificationNodeRecipes: true,
+};
+
+function resourceBoostId(boost) {
+  return boost ? `resource-boost:${boost.itemId}:${boost.amount}` : 'base';
+}
+
+function selectedResourceBoost() {
+  const boosts = globalThis.WULING_STOCK_BILL_SCENARIO?.resourceBoosts || [];
+  if (!selectedResourceBoostId && boosts.length) selectedResourceBoostId = resourceBoostId(boosts[0]);
+  return boosts.find(boost => resourceBoostId(boost) === selectedResourceBoostId) || boosts[0] || null;
+}
+
+function effectiveRawLimits(sourceLimits = rawLimits) {
+  const limits = clonePlain(sourceLimits || []);
+  const boost = selectedResourceBoost();
+  if (!boost) return limits;
+  const row = limits.find(entry => entry.matId === boost.itemId);
+  if (row) row.cap = Number(row.cap || 0) + Number(boost.amount || 0);
+  else limits.push({ matId: boost.itemId, cap: Number(boost.amount || 0) });
+  return limits;
+}
+
+function renderResourceBoostSelector() {
+  const select = document.getElementById('resource-boost-select');
+  if (!select) return;
+  const boosts = globalThis.WULING_STOCK_BILL_SCENARIO?.resourceBoosts || [];
+  if (!boosts.length) {
+    select.innerHTML = '<option value="base">Base</option>';
+    select.value = 'base';
+    return;
+  }
+  if (!selectedResourceBoostId) selectedResourceBoostId = resourceBoostId(boosts[0]);
+  select.innerHTML = boosts.map(boost => {
+    const item = itemById[boost.itemId];
+    return `<option value="${resourceBoostId(boost)}">${itemDisplayName(item || boost.itemId)} +${boost.amount}</option>`;
+  }).join('');
+  select.value = selectedResourceBoostId;
+}
+
+function setSelectedResourceBoost(id) {
+  selectedResourceBoostId = id || '';
+  invalidateMaxCache();
+  recomputeMaxForRaw();
+  renderResources();
+  renderProducts();
+  saveStateNow();
+  if (autoSolveOn()) runSolver(); else runSolver(false, true);
+  globalThis.WulingCandidateController?.scheduleGenerate?.(80);
+}
+
+function setUsePurificationNodeRecipes(enabled) {
+  recipeOptions.usePurificationNodeRecipes = !!enabled;
+  renderRecipeSettingsTab();
+  saveStateNow();
+  markMainRefreshNeeded({ max: true });
+}
+
+function isMainTabActive() {
+  return document.getElementById('page-main')?.classList.contains('active');
+}
+
+function markMainRefreshNeeded(options = {}) {
+  _mainRefreshNeeded = true;
+  _mainMaxRefreshNeeded = _mainMaxRefreshNeeded || !!options.max;
+  if (isMainTabActive()) refreshMainTabIfNeeded();
+}
+
+function refreshMainTabIfNeeded() {
+  if (!_mainRefreshNeeded) return;
+  if (_mainMaxRefreshNeeded) {
+    invalidateMaxCache();
+    recomputeAllMax();
+    renderProducts();
+  }
+  computeSummary();
+  globalThis.WulingCandidateController?.scheduleGenerate?.(80);
+  _mainRefreshNeeded = false;
+  _mainMaxRefreshNeeded = false;
+}
 
 /* ═══════════════════════════════════════════════
    PERSISTENCE
@@ -116,12 +225,7 @@ function saveStateNow() {
 }
 function _doSave() {
   try {
-    const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
-    const outpostCost = parseFloat((document.getElementById('outpost-cost')?.value||'').replace(/,/g,'')) || outpostCostDefault;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      production, rawLimits, facilityLimits, powerBatteries,
-      prices, autoSolve, prioritizeUnsellable: prioritizeUnsellableOn(), outpostCost
-    }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(currentStateSnapshot()));
     encodeStateToUrl();
   } catch (e) {}
 }
@@ -138,6 +242,38 @@ function _doSave() {
 let _pendingUrlPrices = null; // localStorage prices deferred past loadPrices()
 
 function _fmtN(n) { return parseFloat(n.toFixed(3)).toString(); }
+
+function clonePlain(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function currentStateSnapshot(extra = {}) {
+  const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
+  const outpostCost = parseFloat((document.getElementById('outpost-cost')?.value||'').replace(/,/g,'')) || outpostCostDefault;
+  const snapshot = {
+    production,
+    rawLimits,
+    facilityLimits,
+    powerBatteries,
+    prices,
+    autoSolve,
+    prioritizeUnsellable: prioritizeUnsellableOn(),
+    selectedResourceBoostId,
+    recipeOptions,
+    outpostCost,
+    ...extra,
+  };
+  return globalThis.WulingStateSnapshot?.createStateSnapshot?.(snapshot) ?? clonePlain(snapshot);
+}
+
+function scenarioDefaultState() {
+  const scenario = globalThis.WULING_STOCK_BILL_SCENARIO;
+  if (!scenario) return null;
+  return globalThis.WulingScenarioState?.buildScenarioDefaultState?.(scenario, {
+    recipesByOutput,
+    facilityById: facilityTypeById,
+  }) ?? clonePlain(scenario.defaultState);
+}
 
 function encodeStateToUrl() {
   try {
@@ -175,6 +311,8 @@ function encodeStateToUrl() {
     const autoSolve = document.getElementById('auto-solve-toggle')?.checked ?? true;
     parts.push('as=' + (autoSolve ? '1' : '0'));
     if (prioritizeUnsellableOn()) parts.push('pu=1');
+    if (selectedResourceBoostId) parts.push('rb=' + selectedResourceBoostId);
+    if (recipeOptions.usePurificationNodeRecipes === false) parts.push('pn=0');
 
     const outpostCost = parseFloat((document.getElementById('outpost-cost')?.value || '').replace(/,/g, '')) || outpostCostDefault;
     if (outpostCost) parts.push('oc=' + outpostCost);
@@ -193,7 +331,7 @@ function decodeStateFromUrl() {
       if (eq >= 0) map[part.slice(0, eq)] = part.slice(eq + 1);
     });
     // Require at least one recognised side-pane key (also rejects old #s= base64 URLs)
-    if (!map.t && !map.rl && !map.fl && !map.b && map.as === undefined && !map.oc) return false;
+    if (!map.t && !map.rl && !map.fl && !map.b && map.as === undefined && !map.oc && !map.rb && map.pn === undefined) return false;
 
     // Resolve a token that is either a full item/facility ID or a base36 index
     function resolveItemId(tok) {
@@ -247,6 +385,9 @@ function decodeStateFromUrl() {
       if (tog) tog.checked = map.pu === '1';
     }
 
+    if (map.rb) selectedResourceBoostId = map.rb;
+    if (map.pn !== undefined) recipeOptions.usePurificationNodeRecipes = map.pn !== '0';
+
     if (map.oc != null) outpostCostDefault = parseFloat(map.oc) || 0;
 
     return true;
@@ -262,6 +403,13 @@ function _applyStateSnapshot(s) {
   if (Array.isArray(s.powerBatteries)) powerBatteries = s.powerBatteries;
   if (s.prices && typeof s.prices === 'object') _pendingUrlPrices = s.prices;
   if (s.outpostCost != null) outpostCostDefault = s.outpostCost;
+  if (s.selectedResourceBoostId) selectedResourceBoostId = s.selectedResourceBoostId;
+  if (s.recipeOptions && typeof s.recipeOptions === 'object') {
+    recipeOptions = {
+      ...recipeOptions,
+      ...s.recipeOptions,
+    };
+  }
   const tog = document.getElementById('auto-solve-toggle');
   if (tog) tog.checked = s.autoSolve !== false;
   const puTog = document.getElementById('prioritize-unsellable-toggle');
@@ -273,6 +421,11 @@ async function loadState() {
 
   if (!localStorage.getItem(VISITED_KEY)) {
     localStorage.setItem(VISITED_KEY, '1');
+    const scenarioState = scenarioDefaultState();
+    if (scenarioState) {
+      _applyStateSnapshot(scenarioState);
+      return;
+    }
     try {
       const r = await fetch('initialization.json');
       if (r.ok) _applyStateSnapshot(await r.json());
@@ -310,7 +463,7 @@ function fmt(n) {
 function icon(id) {
   const it = itemById[id];
   if (!it) return '';
-  return `<img src="assets/icons/items/${it.iconFile}" class="mat-icon" title="${it.name}">`;
+  return `<img src="assets/icons/items/${it.iconFile}" class="mat-icon" title="${itemDisplayName(it)}">`;
 }
 function facIcon(typeId) {
   return `<img src="assets/icons/facilities/${typeId}.webp" class="mat-icon">`;
@@ -340,6 +493,36 @@ function recipeFor(p) {
   return recipes[0] || null;
 }
 
+function rawCostPerUnit(itemId, seen = new Set()) {
+  if (forcedRawSet.has(itemId)) return 1;
+  if (seen.has(itemId)) return 0;
+  seen.add(itemId);
+  const recipe = recipesByOutput[itemId]?.[0];
+  if (!recipe) return 0;
+  const output = (recipe.outputs || []).find(o => o.itemId === itemId);
+  const outputAmount = Number(output?.amount) || 1;
+  const total = (recipe.inputs || []).reduce((sum, input) => {
+    const amount = Number(input.amount) || 0;
+    return sum + amount * rawCostPerUnit(input.itemId, new Set(seen));
+  }, 0);
+  return total / outputAmount;
+}
+
+function itemInputStep(itemId) {
+  if (forcedRawSet.has(itemId)) return 10;
+  const rawCost = rawCostPerUnit(itemId);
+  if (!(rawCost > 0)) return 1;
+  const steps = [10, 1, 0.1];
+  return steps
+    .map(step => ({ step, score: Math.abs(Math.log10(Math.max(1e-9, (step * rawCost) / 10))) }))
+    .sort((a, b) => a.score - b.score || b.step - a.step)[0].step;
+}
+
+function deductionInputStep(itemId) {
+  if (itemId && itemId.includes('equip_script')) return 0.1;
+  return itemInputStep(itemId);
+}
+
 function invalidateChainCache() { invalidateMaxCache(); }
 
 /* ═══════════════════════════════════════════════
@@ -351,6 +534,7 @@ function switchTab(t) {
   document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.tab === t));
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.getElementById('page-' + t).classList.add('active');
+  if (t === 'main') refreshMainTabIfNeeded();
   if (t === 'prices') renderPricesTab();
   if (t === 'saved') renderSavedTab();
   const app = document.querySelector('.app');
@@ -378,13 +562,22 @@ function renderResources() {
   rawLimits.forEach((rl, ri) => {
     const it = itemById[rl.matId];
     if (!it) return;
+    const boost = selectedResourceBoost();
+    const boostAmount = boost?.itemId === rl.matId ? Number(boost.amount || 0) : 0;
     const d = document.createElement('div');
     d.className = 'item-row';
-    d.style.gridTemplateColumns = 'auto 1fr 72px auto auto';
+    d.style.gridTemplateColumns = 'auto 1fr auto 72px auto auto';
     d.style.gap = '0.375rem';
-    d.innerHTML = `${icon(rl.matId)}<span class="item-name">${it.name}</span>
-      <input class="num-input" type="number" value="${rl.cap}" min="0"
-        onchange="rawLimits[${ri}].cap=+this.value;invalidateChainCache();saveStateNow();recomputeMaxForRaw();renderProducts();if(autoSolveOn())runSolver();else runSolver(false,true)">
+    d.innerHTML = `${icon(rl.matId)}<span class="item-name">${itemDisplayName(it)}</span>
+      <span class="raw-boost-badge">${boostAmount ? `+${_fmtN(boostAmount)}` : ''}</span>
+      <span class="stepper-field">
+        <input class="num-input with-stepper" type="number" value="${rl.cap}" min="0" step="${itemInputStep(rl.matId)}"
+          onchange="updateRawLimitCap(${ri}, this.value)">
+        <span class="stepper-buttons" aria-hidden="true">
+          <button type="button" onclick="stepRawLimit(${ri}, 1)">⌃</button>
+          <button type="button" onclick="stepRawLimit(${ri}, -1)">⌄</button>
+        </span>
+      </span>
       <span class="prod-max-label">/min</span>
       <button class="icon-btn del" onclick="delRawLimit(${ri})">✕</button>`;
     el.appendChild(d);
@@ -397,6 +590,7 @@ function delRawLimit(i) {
   invalidateChainCache();
   renderResources(); saveStateNow(); recomputeMaxForRaw(); renderProducts();
   if (autoSolveOn()) runSolver(); else runSolver(false, true);
+  scheduleWulingCandidates(80);
 }
 
 function positionPortal(dd, anchor) {
@@ -428,9 +622,9 @@ function filterRawSearch() {
   const q = input.value.trim().toLowerCase();
   const limited = new Set(rawLimits.map(rl => rl.matId));
   const available = itemsDB.filter(it => forcedRawSet.has(it.id) && !limited.has(it.id));
-  const matches = q ? available.filter(it => it.name.toLowerCase().includes(q)) : available;
+  const matches = q ? available.filter(it => itemSearchText(it).includes(q)) : available;
   dd.innerHTML = matches.length
-    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickRawLimit('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span></div>`).join('')
+    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickRawLimit('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${itemDisplayName(it)}</span></div>`).join('')
     : '<div class="mat-search-empty">No raw materials to add</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
@@ -444,6 +638,7 @@ function pickRawLimit(matId) {
   invalidateChainCache();
   renderResources(); saveStateNow(); recomputeMaxForRaw(); renderProducts();
   if (autoSolveOn()) runSolver(); else runSolver(false, true);
+  scheduleWulingCandidates(80);
 }
 
 /* ═══════════════════════════════════════════════
@@ -463,13 +658,19 @@ function renderFacilities() {
     d.style.gridTemplateColumns = 'auto 1fr auto auto auto auto';
     d.style.gap = '0.375rem';
     const intOn = !!f.integerOnly;
-    d.innerHTML = `${facIcon(f.gameFacilityId)}<span class="item-name">${f.name}</span>
-      <input class="num-input" type="number" value="${f.cap}" min="0" step="1"
-        title="Max units of this facility the LP may use"
-        onchange="facilityLimits[${fi}].cap=Math.max(0,+this.value);saveStateNow();recomputeMaxForFacility('${f.gameFacilityId}');renderProducts();if(autoSolveOn())runSolver();else runSolver(false,true)">
+    d.innerHTML = `${facIcon(f.gameFacilityId)}<span class="item-name">${facilityDisplayName(f.gameFacilityId)}</span>
+      <span class="stepper-field">
+        <input class="num-input with-stepper" type="number" value="${f.cap}" min="0" step="1"
+          title="Max units of this facility the LP may use"
+          onchange="updateFacilityLimitCap(${fi}, this.value)">
+        <span class="stepper-buttons" aria-hidden="true">
+          <button type="button" onclick="stepFacilityLimit(${fi}, 1)">⌃</button>
+          <button type="button" onclick="stepFacilityLimit(${fi}, -1)">⌄</button>
+        </span>
+      </span>
       <span style="font-size:0.75rem;color:var(--text3);font-weight:600;white-space:nowrap;" title="Integer-only: facility counts are whole numbers">ℤ</span>
       <label class="tog-wrap" onclick="event.stopPropagation()" title="Integer-only: facility counts are whole numbers">
-        <input type="checkbox" class="tog-cb" ${intOn ? 'checked' : ''} onchange="facilityLimits[${fi}].integerOnly=this.checked;saveStateNow();if(autoSolveOn())runSolver();else runSolver(false,true)">
+        <input type="checkbox" class="tog-cb" ${intOn ? 'checked' : ''} onchange="facilityLimits[${fi}].integerOnly=this.checked;saveStateNow();if(autoSolveOn())runSolver();else runSolver(false,true);scheduleWulingCandidates(80)">
         <span class="tog-track"></span>
       </label>
       <button class="icon-btn del" onclick="delFacLimit(${fi})">✕</button>`;
@@ -484,6 +685,7 @@ function delFacLimit(i) {
   if (typeId) recomputeMaxForFacility(typeId);
   renderFacilities(); renderProducts(); saveStateNow();
   if (autoSolveOn()) runSolver(); else runSolver(false, true);
+  scheduleWulingCandidates(80);
 }
 
 
@@ -500,7 +702,7 @@ function chainFacilityTypes() {
   if (!production.length) return new Set();
   const overrides = new Map(production.filter(p => p.recipeId).map(p => [p.id, p.recipeId]));
   let graph;
-  try { graph = buildBipartiteGraph(production.map(p => p.id), overrides); }
+  try { graph = buildBipartiteGraph(production.map(p => p.id), overrides, recipeOptions); }
   catch (e) { return new Set(); }
   const out = new Set();
   graph.recipeNodes.forEach(r => { if (r.facilityId) out.add(r.facilityId); });
@@ -514,9 +716,9 @@ function filterFacTypeSearch() {
   const usedTypeIds = new Set(facilityLimits.map(f => f.gameFacilityId));
   const referenced = chainFacilityTypes();
   let available = gameFacilities.filter(ft => referenced.has(ft.id) && !usedTypeIds.has(ft.id));
-  if (q) available = available.filter(ft => (ft.name||'').toLowerCase().includes(q));
+  if (q) available = available.filter(ft => facilitySearchText(ft).includes(q));
   dd.innerHTML = available.length
-    ? available.map(ft => `<div class="mat-search-item" onmousedown="pickFacType('${ft.id}')"><img src="assets/icons/facilities/${ft.id}.webp" class="mat-icon"><span>${ft.name||ft.id}</span></div>`).join('')
+    ? available.map(ft => `<div class="mat-search-item" onmousedown="pickFacType('${ft.id}')"><img src="assets/icons/facilities/${ft.id}.webp" class="mat-icon"><span>${facilityDisplayName(ft)}</span></div>`).join('')
     : '<div class="mat-search-empty">No facility types to add</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
@@ -531,6 +733,7 @@ function pickFacType(typeId) {
   recomputeMaxForFacility(typeId);
   renderFacilities(); renderProducts(); saveStateNow();
   if (autoSolveOn()) runSolver(); else runSolver(false, true);
+  scheduleWulingCandidates(80);
 }
 
 /* ═══════════════════════════════════════════════
@@ -551,10 +754,10 @@ function filterProdSearch() {
   const q = input.value.trim().toLowerCase();
   const inProd = new Set(production.map(p => p.id));
   const available = itemsDB.filter(it => isTargetItem(it.id) && !inProd.has(it.id));
-  const matches = (q ? available.filter(it => it.name.toLowerCase().includes(q)) : available)
+  const matches = (q ? available.filter(it => itemSearchText(it).includes(q)) : available)
     .sort((a, b) => priceOf(b.id) - priceOf(a.id));
   dd.innerHTML = matches.length
-    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickProdMat('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span></div>`).join('')
+    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickProdMat('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${itemDisplayName(it)}</span></div>`).join('')
     : '<div class="mat-search-empty">No matching items</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
@@ -614,6 +817,68 @@ function setSliderFill(slider) {
   slider.style.setProperty('--fill', pct.toFixed(2) + '%');
 }
 
+function scheduleWulingCandidates(delayMs = 250) {
+  globalThis.WulingCandidateController?.scheduleGenerate?.(delayMs);
+}
+
+function stepNumberValue(value, step, direction) {
+  const current = Number(value) || 0;
+  const amount = Number(step) || 1;
+  const digits = amount < 1 ? 1 : 0;
+  return Math.max(0, Number((current + amount * direction).toFixed(digits)));
+}
+
+function updateRawLimitCap(index, value) {
+  if (!rawLimits[index]) return;
+  rawLimits[index].cap = Math.max(0, Number(value) || 0);
+  invalidateChainCache();
+  saveStateNow();
+  recomputeMaxForRaw();
+  renderResources();
+  renderProducts();
+  if (autoSolveOn()) runSolver(); else runSolver(false, true);
+  scheduleWulingCandidates(80);
+}
+
+function stepRawLimit(index, direction) {
+  const row = rawLimits[index];
+  if (!row) return;
+  updateRawLimitCap(index, stepNumberValue(row.cap, itemInputStep(row.matId), direction));
+}
+
+function updateFacilityLimitCap(index, value) {
+  const row = facilityLimits[index];
+  if (!row) return;
+  row.cap = Math.max(0, Number(value) || 0);
+  saveStateNow();
+  recomputeMaxForFacility(row.gameFacilityId);
+  renderFacilities();
+  renderProducts();
+  if (autoSolveOn()) runSolver(); else runSolver(false, true);
+  scheduleWulingCandidates(80);
+}
+
+function stepFacilityLimit(index, direction) {
+  const row = facilityLimits[index];
+  if (!row) return;
+  updateFacilityLimitCap(index, stepNumberValue(row.cap, 1, direction));
+}
+
+function updatePowerBatteryRate(index, value) {
+  if (!powerBatteries[index]) return;
+  powerBatteries[index].rate = Math.max(0, Number(value) || 0);
+  renderPowerBatteries();
+  computeSummary();
+  saveStateNow();
+  scheduleWulingCandidates();
+}
+
+function stepPowerBattery(index, direction) {
+  const row = powerBatteries[index];
+  if (!row) return;
+  updatePowerBatteryRate(index, stepNumberValue(row.rate, deductionInputStep(row.matId), direction));
+}
+
 function renderProducts() {
   if (_prodSortable) { _prodSortable.destroy(); _prodSortable = null; }
   const el = document.getElementById('prod-list');
@@ -641,7 +906,7 @@ function renderProducts() {
       <div class="prod-item-icon"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"></div>
       <div class="prod-item-right">
         <div class="prod-item-top">
-          <span class="item-name">${it.name}</span>
+          <span class="item-name">${itemDisplayName(it)}</span>
         </div>
         <div class="prod-item-bottom">
           <input class="prod-slider ${p.locked||isTemp?'locked':''}" type="range" min="0" max="${Math.min(mx,1e6).toFixed(3)}" step="any" value="${Math.min(p.rate,Math.min(mx,1e6)).toFixed(3)}">
@@ -667,9 +932,7 @@ function renderProducts() {
         const btn = d.querySelector('.icon-btn:not(.del)');
         if (btn) { btn.className = 'icon-btn pin-temp'; btn.title = 'Make permanent pin'; const ico = btn.querySelector('i'); if (ico) { ico.dataset.lucide = 'pin'; lucide.createIcons({el: btn}); } }
         document.querySelectorAll('.prod-item-row').forEach(row => {
-          const nameEl = row.querySelector('.item-name');
-          if (!nameEl) return;
-          const rp = production.find(x => x.id !== pid && itemById[x.id]?.name === nameEl.textContent.trim());
+          const rp = production.find(x => x.id !== pid && x.id === row.dataset.prodId);
           if (!rp || rp.locked) return;
           const prevBtn = row.querySelector('.icon-btn:not(.del)');
           if (prevBtn && prevBtn.classList.contains('pin-temp')) { prevBtn.className = 'icon-btn'; prevBtn.title = 'Pin (fix for solver)'; const ico = prevBtn.querySelector('i'); if (ico) { ico.dataset.lucide = 'pin-off'; lucide.createIcons({el: prevBtn}); } }
@@ -683,11 +946,13 @@ function renderProducts() {
       display.value = pe.rate.toFixed(3);
       setSliderFill(slider);
       if (autoSolveOn()) { _lastInputT = performance.now(); runSolverThrottled(true); } else runSolverThrottled(true, true);
+      scheduleWulingCandidates(350);
     });
     slider.addEventListener('pointerup', () => {
       _dragging = false;
       renderProducts();
       if (!autoSolveOn()) runSolver(false, true);
+      scheduleWulingCandidates(80);
     });
     display.addEventListener('change', () => {
       _lastChangedProdId = pid;
@@ -698,6 +963,7 @@ function renderProducts() {
       display.value = pe.rate.toFixed(3);
       slider.value = pe.rate.toFixed(3);
       if (autoSolveOn()) runSolver(); else runSolver(false, true);
+      scheduleWulingCandidates(80);
     });
     el.appendChild(d);
   });
@@ -722,6 +988,7 @@ function renderProducts() {
         tempPinnedId = null;
         saveState();
         runSolver(false, !autoSolveOn());
+        scheduleWulingCandidates(80);
       }
     });
   }
@@ -740,11 +1007,14 @@ function filterBatSearch() {
   const dd = getBatPortal();
   const q = input.value.trim().toLowerCase();
   const added = new Set(powerBatteries.map(pb => pb.matId));
-  const available = itemsDB.filter(it => !added.has(it.id) && (it.id.includes('battery') || it.id.includes('proc_battery')));
-  const matches = q ? available.filter(it => it.name.toLowerCase().includes(q)) : available;
+  const deductionIds = new Set((globalThis.WULING_STOCK_BILL_SCENARIO?.deductions || []).map(d => d.itemId));
+  const available = itemsDB.filter(it => !added.has(it.id) && (
+    deductionIds.size ? deductionIds.has(it.id) : (it.id.includes('battery') || it.id.includes('proc_battery'))
+  ));
+  const matches = q ? available.filter(it => itemSearchText(it).includes(q)) : available;
   dd.innerHTML = matches.length
-    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickBatMat('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span></div>`).join('')
-    : '<div class="mat-search-empty">No matching batteries</div>';
+    ? matches.slice(0, 20).map(it => `<div class="mat-search-item" onmousedown="pickBatMat('${it.id}')"><img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${itemDisplayName(it)}</span></div>`).join('')
+    : '<div class="mat-search-empty">No matching deductions</div>';
   dd.style.display = 'block';
   positionPortal(dd, input);
 }
@@ -752,9 +1022,22 @@ function closeBatSearch() { const dd = document.getElementById('bat-portal'); if
 function pickBatMat(mid) {
   const input = document.getElementById('power-bat-input'); if (input) input.value = '';
   closeBatSearch();
-  if (!powerBatteries.find(pb => pb.matId === mid)) { powerBatteries.push({ matId: mid, rate: 1 }); renderPowerBatteries(); computeSummary(); }
+  if (!powerBatteries.find(pb => pb.matId === mid)) {
+    const scenarioDefault = (globalThis.WULING_STOCK_BILL_SCENARIO?.deductions || []).find(d => d.itemId === mid);
+    powerBatteries.push({ matId: mid, rate: Number(scenarioDefault?.defaultRate || 1) });
+    renderPowerBatteries();
+    computeSummary();
+    saveStateNow();
+    globalThis.WulingCandidateController?.scheduleGenerate?.();
+  }
 }
-function removePowerBattery(i) { powerBatteries.splice(i, 1); renderPowerBatteries(); computeSummary(); }
+function removePowerBattery(i) {
+  powerBatteries.splice(i, 1);
+  renderPowerBatteries();
+  computeSummary();
+  saveStateNow();
+  globalThis.WulingCandidateController?.scheduleGenerate?.();
+}
 function renderPowerBatteries() {
   const el = document.getElementById('power-bat-list'); if (!el) return;
   if (!powerBatteries.length) { el.innerHTML = ''; return; }
@@ -767,9 +1050,15 @@ function renderPowerBatteries() {
     const costHr = netRate * priceOf(pb.matId) * 60;
     return `<div class="power-bat-row">
       <img src="assets/icons/items/${it.iconFile}" class="mat-icon">
-      <span style="flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${it.name}</span>
-      <input type="number" value="${pb.rate}" min="0" step="0.01" class="fac-num-input"
-        onchange="powerBatteries[${i}].rate=Math.max(0,+this.value);renderPowerBatteries();computeSummary()">
+      <span style="flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${itemDisplayName(it)}</span>
+      <span class="stepper-field">
+        <input type="number" value="${pb.rate}" min="0" step="${deductionInputStep(pb.matId)}" class="fac-num-input with-stepper"
+          onchange="updatePowerBatteryRate(${i}, this.value)">
+        <span class="stepper-buttons" aria-hidden="true">
+          <button type="button" onclick="stepPowerBattery(${i}, 1)">⌃</button>
+          <button type="button" onclick="stepPowerBattery(${i}, -1)">⌄</button>
+        </span>
+      </span>
       <span class="prod-max-label">/min</span>
       <button class="icon-btn del" style="width:18px;height:18px;font-size:11px;" onclick="removePowerBattery(${i})">✕</button>
     </div>`;
@@ -790,10 +1079,10 @@ function filterPriceSearch() {
   const dd = getPricePortal();
   const q = input.value.trim().toLowerCase();
   if (!q) { dd.style.display = 'none'; return; }
-  const matches = itemsDB.filter(it => isTargetItem(it.id) && it.name.toLowerCase().includes(q)).slice(0, 24);
+  const matches = itemsDB.filter(it => isTargetItem(it.id) && itemSearchText(it).includes(q)).slice(0, 24);
   dd.innerHTML = matches.length
     ? matches.map(it => `<div class="mat-search-item" onmousedown="addPriceEntry('${it.id}')">
-        <img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${it.name}</span>
+        <img src="assets/icons/items/${it.iconFile}" class="mat-icon"><span>${itemDisplayName(it)}</span>
         ${prices[it.id] ? `<span style="font-size:10px;color:var(--text3);margin-left:auto;">${prices[it.id]}</span>` : ''}
       </div>`).join('')
     : '<div class="mat-search-empty">No matching items</div>';
@@ -805,10 +1094,20 @@ function addPriceEntry(id) {
   const input = document.getElementById('price-search-input'); if (input) input.value = '';
   closePriceSearch();
   if (!prices[id]) prices[id] = 0;
+  saveState();
+  markMainRefreshNeeded();
   renderPricesTab();
 }
+
+function updatePriceEntry(id, value) {
+  prices[id] = +value;
+  saveState();
+  markMainRefreshNeeded();
+}
+
 function renderPricesTab() {
   const el = document.getElementById('price-config-list'); if (!el) return;
+  renderRecipeSettingsTab();
   const priced = Object.keys(prices).filter(id => itemById[id]);
   if (!priced.length) { el.innerHTML = '<div class="empty-state">Search for items above to set their sell price</div>'; return; }
   el.innerHTML = '';
@@ -819,14 +1118,34 @@ function renderPricesTab() {
     d.style.gridTemplateColumns = 'auto 1fr 80px auto';
     d.style.gap = '0.5rem';
     d.innerHTML = `<img src="assets/icons/items/${it.iconFile}" class="mat-icon">
-      <span class="item-name">${it.name}</span>
+      <span class="item-name">${itemDisplayName(it)}</span>
       <input class="num-input" type="number" value="${prices[id]}" min="0"
-        onchange="prices['${id}']=+this.value;saveState();computeSummary()">
+        onchange="updatePriceEntry('${id}', this.value)">
       <button class="icon-btn del" onclick="deletePriceEntry('${id}')">✕</button>`;
     el.appendChild(d);
   });
 }
-function deletePriceEntry(id) { delete prices[id]; saveState(); renderPricesTab(); computeSummary(); }
+function deletePriceEntry(id) { delete prices[id]; saveState(); renderPricesTab(); markMainRefreshNeeded(); }
+
+function renderRecipeSettingsTab() {
+  const el = document.getElementById('recipe-config-list');
+  if (!el) return;
+  const checked = recipeOptions.usePurificationNodeRecipes !== false ? 'checked' : '';
+  el.innerHTML = `
+    <label class="recipe-toggle-row">
+      <span class="recipe-toggle-main">
+        ${facIcon('liquidcleanfactory_005_1')}
+        <span>
+          <strong>${facilityDisplayName('liquidcleanfactory_005_1')}</strong>
+        </span>
+      </span>
+      <span class="tog-wrap" title="Allow ${facilityDisplayName('liquidcleanfactory_005_1')}">
+        <input type="checkbox" class="tog-cb" ${checked}
+          onchange="setUsePurificationNodeRecipes(this.checked)">
+        <span class="tog-track"></span>
+      </span>
+    </label>`;
+}
 
 /* Pipeline helpers, graph builder, flow analysis, solver state, runSolverThrottled → solver_pipeline.js §§ 3–6 */
 
@@ -919,7 +1238,7 @@ function renderSummaryTable(netRates, fixedCost) {
   const visibleProd = production.filter(p => Math.abs(netRates[p.id] || 0) >= 5e-4);
   if (!visibleProd.length && !batOnlyRows.length) { el.innerHTML = '<div class="empty-state">No production items added yet</div>'; return; }
   const gridCols = sumGridCols(), totalW = sumGridWidth();
-  document.querySelectorAll('#page-main .body-area > .result-table-wrap').forEach(w => {
+  document.querySelectorAll('#page-main .body-area > .legacy-summary-wrap').forEach(w => {
     w.style.width = '100%'; w.style.maxWidth = totalW + 'px';
   });
   const rows = [];
@@ -955,7 +1274,7 @@ function renderSummaryTable(netRates, fixedCost) {
     <div class="sg-cell sg-head">Per minute</div>
     <div class="sg-cell sg-head sg-right">Price</div>
     <div class="sg-cell sg-head sg-right">Bill / hour</div>
-    ${rows.map(({ it, ihr, perMinCell }) => buildSumProductRow(it.iconFile, it.name, perMinCell, priceOf(it.id), ihr)).join('')}
+    ${rows.map(({ it, ihr, perMinCell }) => buildSumProductRow(it.iconFile, itemDisplayName(it), perMinCell, priceOf(it.id), ihr)).join('')}
     ${buildSumTotalRows(totals)}
     <div class="sg-cell sg-save-row" style="grid-column:1/-1;"><button class="btn-save-snapshot" onclick="saveSnapshot()">Save Production</button></div>
   </div>`;
@@ -1049,7 +1368,7 @@ function renderUsageBars(ru) {
       const cls  = over ? 'bar-over' : (hasCap && pct > 80) ? 'bar-warn' : 'bar-ok';
       const nums = hasCap ? `${used.toFixed(1)} / ${cap}` : `${used.toFixed(1)}`;
       html += `<div class="res-bar-row">
-        <span class="res-bar-label"><img src="assets/icons/items/${it.iconFile}" class="mat-icon" style="margin-right:3px;">${it.name}</span>
+        <span class="res-bar-label"><img src="assets/icons/items/${it.iconFile}" class="mat-icon" style="margin-right:3px;">${itemDisplayName(it)}</span>
         <div class="res-bar-track"><div class="res-bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
         <span class="res-bar-nums ${over ? 'td-neg' : ''}">${nums}</span>
       </div>`;
@@ -1066,13 +1385,13 @@ function renderUsageBars(ru) {
       const f        = facLimitMap[fid];
       const cap      = f?.cap;
       const hasCap   = cap != null;
-      const facName  = f?.name || facilityTypeById[fid]?.name || fid;
+      const facName  = facilityDisplayName(f?.gameFacilityId || fid);
       const over     = hasCap && load > cap;
       const totalPct = hasCap ? Math.min(100, (load / (cap || 1)) * 100) : 100;
       const segments = facSegs[fid] || [];
       const denominator = hasCap ? cap : (load || 1);  // always LP units
       const segHtml = segments.map((s, si) =>
-        `<div class="fac-seg" style="width:${((s.contrib / denominator) * 100).toFixed(2)}%;background:${FAC_COLORS[si % FAC_COLORS.length]};" data-tip="${s.it?.name || '?'}: ${s.rate.toFixed(1)}/min · ${s.contrib.toFixed(2)}u" data-icon="${s.it?.iconFile || ''}"></div>`
+        `<div class="fac-seg" style="width:${((s.contrib / denominator) * 100).toFixed(2)}%;background:${FAC_COLORS[si % FAC_COLORS.length]};" data-tip="${itemDisplayName(s.it) || '?'}: ${s.rate.toFixed(1)}/min · ${s.contrib.toFixed(2)}u" data-icon="${s.it?.iconFile || ''}"></div>`
       ).join('');
       const emptyPct = hasCap ? (100 - totalPct).toFixed(2) : '0';
       const countText = hasCap ? `${physical.toFixed(2)} / ${cap}u` : `${physical.toFixed(2)}u`;
@@ -1149,7 +1468,7 @@ function snapshotRowsFromCurrent() {
     if (Math.abs(net) < 5e-4) return;
     const it = itemById[p.id]; if (!it) return;
     const batRate = batRateMap[p.id] || 0;
-    rows.push({ name: it.name, iconFile: it.iconFile, rate: net, grossRate: p.rate || 0, batRate, sell: priceOf(p.id), ihr: priceOf(p.id) * net * 60, locked: !!p.locked });
+    rows.push({ name: itemDisplayName(it), iconFile: it.iconFile, rate: net, grossRate: p.rate || 0, batRate, sell: priceOf(p.id), ihr: priceOf(p.id) * net * 60, locked: !!p.locked });
   });
   // Battery-only rows
   powerBatteries.forEach(pb => {
@@ -1157,7 +1476,7 @@ function snapshotRowsFromCurrent() {
     const it = itemById[pb.matId]; if (!it) return;
     const net = -pb.rate;
     if (Math.abs(net) < 5e-4) return;
-    rows.push({ name: it.name, iconFile: it.iconFile, rate: net, grossRate: 0, batRate: 0, sell: priceOf(pb.matId), ihr: priceOf(pb.matId) * net * 60, locked: false });
+    rows.push({ name: itemDisplayName(it), iconFile: it.iconFile, rate: net, grossRate: 0, batRate: 0, sell: priceOf(pb.matId), ihr: priceOf(pb.matId) * net * 60, locked: false });
   });
   return rows;
 }
@@ -1178,13 +1497,7 @@ function saveSnapshot() {
     name,
     date: new Date().toISOString(),
     rows, totalIhr, fixedCost, netHr,
-    state: {
-      production:     JSON.parse(JSON.stringify(production)),
-      rawLimits:      JSON.parse(JSON.stringify(rawLimits)),
-      facilityLimits: JSON.parse(JSON.stringify(facilityLimits)),
-      powerBatteries: JSON.parse(JSON.stringify(powerBatteries)),
-      outpostCost,
-    },
+    state: currentStateSnapshot({ outpostCost }),
   };
   const snaps = loadSnapshots(); snaps.push(snap); saveSnapshots(snaps);
   switchTab('saved');
@@ -1276,12 +1589,76 @@ function renderSavedTab() {
    INIT
 ═══════════════════════════════════════════════ */
 function renderAll() {
+  renderResourceBoostSelector();
   renderResources();
   renderFacilities();
   renderProducts();
   renderPowerBatteries();
+  globalThis.WulingCandidateController?.render?.();
   computeSummary();
+  globalThis.WulingCandidateController?.scheduleGenerate?.();
 }
+
+function ensureProductionEntry(itemId) {
+  let entry = production.find(p => p.id === itemId);
+  if (entry) return entry;
+  const recipes = recipesByOutput[itemId] || [];
+  if (!recipes.length) return null;
+  entry = { id: itemId, recipeId: recipes[0].id, rate: 0, locked: false, optimized: false };
+  production.push(entry);
+  return entry;
+}
+
+function applyProductionPlan(plan) {
+  if (!plan || !Array.isArray(plan.production)) return false;
+  const tradeIds = new Set((globalThis.WULING_STOCK_BILL_SCENARIO?.tradeItems || []).map(entry => entry.itemId));
+  const plannedRates = new Map(plan.production.map(entry => [entry.itemId, Number(entry.rate) || 0]));
+  let changed = false;
+
+  if (plan.selectedResourceBoostId != null && selectedResourceBoostId !== plan.selectedResourceBoostId) {
+    selectedResourceBoostId = plan.selectedResourceBoostId;
+    changed = true;
+  }
+
+  for (const itemId of plannedRates.keys()) {
+    if (!ensureProductionEntry(itemId)) continue;
+  }
+
+  production.forEach(entry => {
+    if (!tradeIds.has(entry.id) && !plannedRates.has(entry.id)) return;
+    const nextRate = plannedRates.get(entry.id) ?? 0;
+    if (Math.abs((Number(entry.rate) || 0) - nextRate) > 1e-9 || entry.locked || entry.optimized) {
+      entry.rate = nextRate;
+      entry.locked = false;
+      entry.optimized = false;
+      changed = true;
+    }
+  });
+
+  tempPinnedId = null;
+  _lastChangedProdId = null;
+  _infeasibleProdId = null;
+  _lastGraph = null;
+  _lastFacilityCounts = null;
+  invalidateChainCache();
+  production.forEach(recomputeMax);
+  renderResourceBoostSelector();
+  renderResources();
+  renderProducts();
+  saveStateNow();
+  runSolver(false, true);
+  return changed || plan.production.length > 0;
+}
+
+globalThis.WulingAppState = {
+  getSnapshot: () => currentStateSnapshot(),
+  getScenario: () => globalThis.WULING_STOCK_BILL_SCENARIO,
+  applyProductionPlan,
+  createSolverContext: (extra = {}) => createSolverContextFromGlobals(extra),
+  solveModel: (options = {}) => solveProductionModel(options),
+  solveSnapshot: (snapshot, options = {}) => solveProductionModel({ ...options, context: snapshot }),
+  solveCurrent: (options = {}) => runSolver(false, !!options.pinAll),
+};
 
 // Global click handler — close all search portals
 document.addEventListener('click', e => {
@@ -1310,6 +1687,22 @@ document.addEventListener('click', e => {
     const input = document.getElementById('power-bat-input');
     if (input && !input.contains(e.target) && !bportal.contains(e.target)) closeBatSearch();
   }
+});
+
+document.addEventListener('wheel', e => {
+  const input = e.target?.closest?.('input[type="number"]');
+  if (!input) return;
+  if (document.activeElement === input) input.blur();
+}, { capture: true, passive: true });
+
+globalThis.WulingI18n?.onChange?.(() => {
+  renderResourceBoostSelector();
+  renderResources();
+  renderFacilities();
+  renderProducts();
+  renderPowerBatteries();
+  renderPricesTab();
+  computeSummary();
 });
 
 Promise.all([loadPrices(), loadState()]).then(() => {

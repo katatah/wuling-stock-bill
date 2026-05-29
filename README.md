@@ -1,55 +1,63 @@
-# Endfield Production Solver
+# Wuling Stock Bill Guide
 
-A browser-based linear programming solver for production planning in **Arknights: Endfield**.
+A browser-based planning helper for **Arknights: Endfield** Wuling Stock Bill
+production.
 
-Set your production targets, raw resource limits, and facility caps — the solver finds the optimal allocation that maximises profit per hour.
+The tool compares multiple production candidates instead of showing only one
+answer. It is meant to help you choose a plan that earns enough Wuling Stock
+Bills while still being practical to build.
 
-## Features
+## What It Helps With
 
-- **LP solver** — powered by [HiGHS](https://highs.dev/) (WebAssembly), runs entirely in the browser with no backend
-- **Production targets** — add items you want to produce; pin rates or let the solver optimize freely
-- **Raw resource limits** — cap inputs like ores and water to reflect your outpost's actual yield
-- **Facility limits** — constrain how many of each facility type can run simultaneously
-- **Power consumption** — track battery cost against production income
-- **Item prices** — set sell prices per item; the LP objective maximises net profit/hr
-- **Saved productions** — snapshot any result and compare across configurations
-- **Auto-solve** — re-runs the LP on every change; toggle off for manual control
+- Compare Wuling Stock Bill production candidates side by side.
+- Check raw resource and facility usage for each candidate.
+- See how battery and equipment-part deductions change the final bill amount.
+- Inspect facility mix, shared material usage, and fraction splitter hints.
+- Apply a candidate back to the Production panel for small manual adjustments.
+- Open the selected production rates in endfield-calc for a deeper factory
+  check.
 
-## Usage
+## How To Use
 
-Host the folder with any static file server and open the localhost URL in your browser.
+1. Set raw resource limits and deduction rates in the Production panel.
+2. Adjust target production ranges when you want to test a specific plan.
+3. Review the Candidates table.
+4. Select a row to open the detail panel.
+5. Double-click a candidate row to copy its design rates back to Production.
 
-No build step required.
+The `Transfer` column represents the selected stock-transfer boost variant.
 
-## Project Structure
+## Run Locally
 
+The app has no build step. A static server is enough.
+
+```bash
+npm install
+npm run serve
 ```
-index.html              — app shell and tab layout
-endfield_calculator.js  — UI, state management, rendering
-endfield_calculator.css — styles
-solver_pipeline.js      — LP graph construction and HiGHS adapter
-assets/
-  items.json            — item catalogue
-  recipes.json          — recipes and facility definitions
-  solver_config.js      — cost weights and item blacklist
-  icons/                — item and facility icons
+
+Open the local URL printed by the server.
+
+## Development
+
+Common checks:
+
+```bash
+npm run check
+npm test
 ```
 
-## Configuration
+Developer-oriented notes live in `docs/`:
 
-Edit [`assets/solver_config.js`](assets/solver_config.js) to tune solver behaviour:
-
-| Key | Description |
-|---|---|
-| `weights.surplus` | Penalty per unit/min of unpriced waste byproducts |
-| `weights.machine` | Base penalty per facility run |
-| `weights.power` | Additional penalty per kW of facility power draw |
-| `blacklist` | Item IDs stripped from the dataset at load time |
+- [Architecture](docs/architecture.md)
+- [Candidate generation](docs/candidate-generation.md)
+- [Porting roadmap](docs/wuling-porting-roadmap.md)
 
 ## Disclaimer
 
-Arknights: Endfield is a trademark of Hypergryph. This tool is not affiliated with or endorsed by Hypergryph.
+Arknights: Endfield is a trademark of Hypergryph. This tool is not affiliated
+with or endorsed by Hypergryph.
 
 ## License
 
-[MIT](LICENSE.md) © 2025 Hikarin
+[MIT](LICENSE)

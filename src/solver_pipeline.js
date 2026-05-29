@@ -28,7 +28,8 @@
  *                    │  Variables : x_ri  — facility count for recipe r (≥ 0)
  *                    │              surp_X — surplus absorber for zero-price dead ends
  *                    │  Constraints:
- *                    │    bal_X   net production ≥ 0  (= pinnedRate for fixed items)
+ *                    │    bal_X   net production ≥ 0  (= pinnedRate for fixed items,
+ *                    │            = 0 for forced-disposal fluids)
  *                    │    raw_R   Σ consumption ≤ rawCap
  *                    │    fac_F   Σ facility counts ≤ facCap
  *                    │    ub_net_X  net production ≤ singleMaxRate[X]  (unbounded guard)
@@ -109,6 +110,7 @@
 
 // Resolved HiGHS WebAssembly instance; null until setHighsInstance is called.
 let _highs = null;
+const _solverGlobal = typeof window !== 'undefined' ? window : globalThis;
 
 function isHighsReady() { return !!_highs; }
 
@@ -130,7 +132,7 @@ function setHighsInstance(h) {
 }
 // If the HiGHS WASM resolved before this script loaded, the head bootstrap
 // stashed the instance in window._highsPending — consume it now.
-if (window._highsPending) { setHighsInstance(window._highsPending); window._highsPending = null; }
+if (_solverGlobal._highsPending) { setHighsInstance(_solverGlobal._highsPending); _solverGlobal._highsPending = null; }
 
 // compileLP: serialise an LP model object into CPLEX LP format text.
 //
@@ -177,9 +179,14 @@ function compileLP(model) {
     const terms = constraintTerms.get(cname);
     if (!terms || !terms.length) continue;  // HiGHS rejects empty constraint rows
     const expr = stripLeadingPlus(terms.join(' '));
-    if ('max' in bound)        cLines.push('  ' + cname + ': ' + expr + ' <= ' + bound.max);
-    else if ('min' in bound)   cLines.push('  ' + cname + ': ' + expr + ' >= ' + bound.min);
-    else if ('equal' in bound) cLines.push('  ' + cname + ': ' + expr + ' = '  + bound.equal);
+    if ('equal' in bound) {
+      cLines.push('  ' + cname + ': ' + expr + ' = ' + bound.equal);
+    } else {
+      const hasMax = 'max' in bound;
+      const hasMin = 'min' in bound;
+      if (hasMax) cLines.push('  ' + cname + (hasMin ? '_max' : '') + ': ' + expr + ' <= ' + bound.max);
+      if (hasMin) cLines.push('  ' + cname + (hasMax ? '_min' : '') + ': ' + expr + ' >= ' + bound.min);
+    }
   }
 
   const generalSection = (model.generals && model.generals.length)
@@ -238,12 +245,17 @@ let _singleMaxDirty = true;
 // the item's chosen recipe, every facility limit, and every raw limit.
 // Any change to limits triggers invalidateMaxCache(), which clears the map
 // and sets _singleMaxDirty so the next runSolver call rebuilds _singleMaxMap.
-function _maxCacheKey(id) {
-  const p = prodEntry(id);
+function _maxCacheKey(id, context = null) {
+  const ctxProduction = context?.production ?? production;
+  const ctxRawLimits = context?.rawLimits ?? rawLimits;
+  const ctxFacilityLimits = context?.facilityLimits ?? facilityLimits;
+  const ctxRecipeOptions = context?.recipeOptions ?? {};
+  const p = ctxProduction.find(entry => entry.id === id);
   const recipeId = p?.recipeId || '';
-  const facKey = facilityLimits.map(f => f.gameFacilityId + ':' + f.cap).join(',');
-  const rawKey = rawLimits.map(r => r.matId + ':' + r.cap).join(',');
-  return id + '|' + recipeId + '|' + facKey + '|' + rawKey;
+  const facKey = ctxFacilityLimits.map(f => f.gameFacilityId + ':' + f.cap).join(',');
+  const rawKey = ctxRawLimits.map(r => r.matId + ':' + r.cap).join(',');
+  const recipeKey = ctxRecipeOptions.usePurificationNodeRecipes === false ? 'pn0' : 'pn1';
+  return id + '|' + recipeId + '|' + facKey + '|' + rawKey + '|' + recipeKey;
 }
 
 // Invalidate both caches — called whenever the limit fingerprint changes.
@@ -253,7 +265,9 @@ function invalidateMaxCache() { _maxCache.clear(); _singleMaxDirty = true; }
 // Builds the same balance/raw/facility constraint structure as the global LP
 // but with a single-item objective and no pinned items or batteries.
 // Returns the max rate (number ≥ 0) or null on solver failure.
-function solveItemMax(targetId, graph) {
+function solveItemMax(targetId, graph, context = null) {
+  const ctxRawLimits = context?.rawLimits ?? rawLimits;
+  const ctxFacilityLimits = context?.facilityLimits ?? facilityLimits;
   const recipeList = [...graph.recipeNodes.values()];
   if (!recipeList.length) return null;
   const constraints = {};
@@ -276,7 +290,7 @@ function solveItemMax(targetId, graph) {
   });
 
   // Raw material caps (replicate global LP's raw_R constraints).
-  rawLimits.forEach(rl => {
+  ctxRawLimits.forEach(rl => {
     const cName = `raw_${rl.matId}`;
     constraints[cName] = { max: rl.cap };
     recipeList.forEach((r, ri) => {
@@ -286,7 +300,7 @@ function solveItemMax(targetId, graph) {
   });
 
   // Facility caps (replicate global LP's fac_F constraints).
-  facilityLimits.forEach(f => {
+  ctxFacilityLimits.forEach(f => {
     const cName = `fac_${f.gameFacilityId}`;
     constraints[cName] = { max: f.cap };
     recipeList.forEach((r, ri) => {
@@ -313,10 +327,11 @@ function solveItemMax(targetId, graph) {
 // Checks _maxCache first; falls back to solveItemMax (or a simple facility-
 // count bound when HiGHS isn't loaded yet).
 function solveMaxForItem(id) {
-  const cacheKey = _maxCacheKey(id);
+  const context = createSolverContextFromGlobals();
+  const cacheKey = _maxCacheKey(id, context);
   if (_maxCache.has(cacheKey)) return _maxCache.get(cacheKey);
 
-  const p = prodEntry(id);
+  const p = context.production.find(entry => entry.id === id);
   const r = p ? recipeFor(p) : null;
   if (!r) { _maxCache.set(cacheKey, 1e6); return 1e6; }
 
@@ -329,16 +344,16 @@ function solveMaxForItem(id) {
     try {
       // Build a graph rooted at this item only (honours any user recipe override).
       const overrides = p?.recipeId ? new Map([[id, p.recipeId]]) : new Map();
-      const graph = buildBipartiteGraph([id], overrides);
+      const graph = buildBipartiteGraph([id], overrides, context.recipeOptions);
       if (graph.recipeNodes.size) {
-        const v = solveItemMax(id, graph);
+        const v = solveItemMax(id, graph, context);
         // v >= 0 check: cap=0 on the item's facility means v=0 is a valid answer.
         if (typeof v === 'number' && isFinite(v) && v >= 0) final = v;
       }
     } catch (e) {
       // HiGHS error: fall back to simple facility-count ceiling.
       let mx = Infinity;
-      facilityLimits.forEach(f => {
+      context.facilityLimits.forEach(f => {
         if (f.gameFacilityId === r.facilityId) mx = Math.min(mx, f.cap * outputRatePerFac);
       });
       if (isFinite(mx) && mx >= 0) final = mx;
@@ -346,7 +361,7 @@ function solveMaxForItem(id) {
   } else {
     // HiGHS not yet loaded: approximate with facility count × output rate.
     let mx = Infinity;
-    facilityLimits.forEach(f => {
+    context.facilityLimits.forEach(f => {
       if (f.gameFacilityId === r.facilityId) mx = Math.min(mx, f.cap * outputRatePerFac);
     });
     if (isFinite(mx) && mx >= 0) final = mx;
@@ -503,7 +518,16 @@ function selectRecipe(recipes, visitedPath) {
        rawMaterials:   Set<itemId>,
      }
 ═══════════════════════════════════════════════ */
-function buildBipartiteGraph(targetIds, recipeOverrides) {
+function buildBipartiteGraph(targetIds, recipeOverrides, recipeOptions = null) {
+  const options = recipeOptions ?? {};
+  const usePurificationNodeRecipes = options.usePurificationNodeRecipes !== false;
+  const isRecipeEnabled = recipe => {
+    if (!recipe) return false;
+    if (!usePurificationNodeRecipes && recipe.facilityId === 'liquidcleanfactory_005_1') return false;
+    return true;
+  };
+  const enabledRecipes = recipes => (recipes || []).filter(isRecipeEnabled);
+
   const graph = {
     itemNodes: new Map(),
     recipeNodes: new Map(),
@@ -551,7 +575,7 @@ function buildBipartiteGraph(targetIds, recipeOverrides) {
     graph.itemNodes.set(itemId, { isRawMaterial: isRaw });
     if (isRaw) { graph.rawMaterials.add(itemId); return; }
 
-    const available = recipesByOutput[itemId] || [];
+    const available = enabledRecipes(recipesByOutput[itemId]);
     if (available.length === 0) {
       graph.itemNodes.get(itemId).isRawMaterial = true;
       graph.rawMaterials.add(itemId);
@@ -565,7 +589,7 @@ function buildBipartiteGraph(targetIds, recipeOverrides) {
 
     // User override: restrict to the pinned recipe only (fall back to pool if invalid).
     const recipesToAdd = (recipeOverrides && recipeOverrides.has(itemId))
-      ? [recipeById[recipeOverrides.get(itemId)] || pool[0]]
+      ? [isRecipeEnabled(recipeById[recipeOverrides.get(itemId)]) ? recipeById[recipeOverrides.get(itemId)] : pool[0]]
       : pool;
 
     for (const r of recipesToAdd) {
@@ -591,12 +615,17 @@ function buildBipartiteGraph(targetIds, recipeOverrides) {
     for (const r of snapshot) {
       for (const out of (r.outputs || [])) {
         if (!forcedDisposalSet.has(out.itemId)) continue;
-        const consumers = recipesByInput[out.itemId] || [];
+        const consumers = enabledRecipes(recipesByInput[out.itemId]);
         for (const cons of consumers) {
           if (graph.recipeNodes.has(cons.id)) continue;
           if (isDismantleRecipe(cons)) continue;
           if (!isDisposalOnlyRecipe(cons)) continue;
-          const useful = (cons.outputs || []).some(o => graph.itemNodes.has(o.itemId));
+          // Recyclers with useful outputs are added when they can feed the
+          // current graph. Zero-output disposal sinks are also added so
+          // unhandled wastewater is represented as Water Treatment usage
+          // instead of disappearing into a mathematical surplus absorber.
+          const outputs = cons.outputs || [];
+          const useful = outputs.length === 0 || outputs.some(o => graph.itemNodes.has(o.itemId));
           if (!useful) continue;
           addRecipeToGraph(cons);
           (cons.inputs || []).forEach(inp => traverse(inp.itemId));
@@ -635,7 +664,7 @@ function buildBipartiteGraph(targetIds, recipeOverrides) {
       anyAdded = false;
       graph.itemNodes.forEach((info, iid) => {
         if (info.isRawMaterial || reachable.has(iid)) return;
-        const viable = (recipesByOutput[iid] || []).filter(r =>
+        const viable = enabledRecipes(recipesByOutput[iid]).filter(r =>
           !isDismantleRecipe(r) &&
           !isDisposalOnlyRecipe(r) &&
           !graph.recipeNodes.has(r.id) &&
@@ -712,6 +741,22 @@ let _lastGraph = null;
 let _lastFacilityCounts = null;
 let _lastSolvedRates = null; // production rates at the time of the last LP solve
 
+function solverResultSnapshot(status, graph, recipeFacilityCounts, extra = {}) {
+  if (status !== 'optimal' || !graph || !recipeFacilityCounts) return { status, ...extra };
+  const netRates = computeNetRatesFromFlow(recipeFacilityCounts, graph);
+  const { rawUse, facUse } = rawAndFacilityUsage(recipeFacilityCounts, graph);
+  const recipeCounts = {};
+  recipeFacilityCounts.forEach((value, key) => { if (value > 1e-9) recipeCounts[key] = value; });
+  return {
+    status,
+    netRates,
+    rawUse,
+    facUse,
+    recipeFacilityCounts: recipeCounts,
+    ...extra,
+  };
+}
+
 // RAF handle for LP throttle — ensures at most one solve per animation frame
 // during continuous slider drag.
 let _solverRafId = null;
@@ -784,93 +829,96 @@ function updateSlidersInPlace() {
   });
 }
 
-// runSolver: single global LP — one variable per recipe, one balance
-// constraint per non-raw item.  No SCC detection; the LP handles cycles
-// implicitly.  No free-disposal special cases; every item gets the same
-// net_production >= 0 constraint.
-//
-// inPlace=true:  update sliders in-place (called during slider drag via
-//                runSolverThrottled); avoids full DOM rebuild.
-// inPlace=false: full renderProducts() rebuild (called after state changes).
-function runSolver(inPlace = false, pinAll = false) {
+function cloneSolverValue(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function createSolverContextFromGlobals(extra = {}) {
+  const currentRawLimits = typeof effectiveRawLimits === 'function'
+    ? effectiveRawLimits(rawLimits)
+    : rawLimits;
+  return {
+    production: cloneSolverValue(production),
+    rawLimits: cloneSolverValue(currentRawLimits),
+    facilityLimits: cloneSolverValue(facilityLimits),
+    powerBatteries: cloneSolverValue(powerBatteries),
+    prices: cloneSolverValue(prices),
+    recipeOptions: cloneSolverValue(typeof recipeOptions !== 'undefined' ? recipeOptions : {}),
+    prioritizeUnsellable: typeof prioritizeUnsellableOn === 'function' ? !!prioritizeUnsellableOn() : false,
+    ...extra,
+  };
+}
+
+function normalizeSolverContext(context = {}) {
+  return {
+    production: cloneSolverValue(context.production ?? []),
+    rawLimits: cloneSolverValue(context.rawLimits ?? []),
+    facilityLimits: cloneSolverValue(context.facilityLimits ?? []),
+    powerBatteries: cloneSolverValue(context.powerBatteries ?? []),
+    prices: cloneSolverValue(context.prices ?? prices ?? {}),
+    recipeOptions: cloneSolverValue(context.recipeOptions ?? {}),
+    prioritizeUnsellable: !!context.prioritizeUnsellable,
+    tempPinnedId: context.tempPinnedId ?? null,
+  };
+}
+
+// solveProductionModel: compute a recipe schedule from the current production
+// state without mutating the UI or production rates.  The existing runSolver
+// wrapper applies this result to the legacy AIC-style screen; Wuling candidate
+// generation should call this boundary instead of reaching into the render
+// pipeline.
+function solveProductionModel(options = {}) {
+  const context = normalizeSolverContext(options.context ?? createSolverContextFromGlobals({
+    tempPinnedId: typeof tempPinnedId !== 'undefined' ? tempPinnedId : null,
+  }));
+  const ctxProduction = context.production;
+  const ctxRawLimits = context.rawLimits;
+  const ctxFacilityLimits = context.facilityLimits;
+  const ctxPrices = context.prices;
+  const ctxPriceOf = id => ctxPrices[id] ?? 0;
+  const ctxIsFixed = p => !!p.locked || p.id === context.tempPinnedId;
+  const pinAll = !!options.pinAll;
+  const pinTolerance = Math.max(0, Number(options.pinTolerance) || 0);
   const _t0 = performance.now();
-  const box = document.getElementById('solver-log');
-  if (box) box.innerHTML = '';
-  if (!production.length) { logS('No production items.', 'err'); return; }
-  if (!isHighsReady()) { _pendingSolve = { inPlace, pinAll }; return; }
+  if (!ctxProduction.length) return { status: 'empty', timings: { t0: _t0 } };
+  if (!isHighsReady()) return { status: 'pending', timings: { t0: _t0 } };
 
-  // ─── Phase 1: Build graph ────────────────────────────────────────────
-  // Collect all production item IDs (deduped) and any user recipe overrides,
-  // then build the bipartite graph via DFS + augmentation + cycle repair.
-  const allIds = [...new Set(production.map(p => p.id))];
-  const recipeOverrides = new Map(production.filter(p => p.recipeId).map(p => [p.id, p.recipeId]));
-  const graph = buildBipartiteGraph(allIds, recipeOverrides);
-  if (!graph.recipeNodes.size) { logS('No recipes found.', 'err'); return; }
+  const allIds = [...new Set(ctxProduction.map(p => p.id))];
+  const recipeOverrides = new Map(ctxProduction.filter(p => p.recipeId).map(p => [p.id, p.recipeId]));
+  const graph = buildBipartiteGraph(allIds, recipeOverrides, context.recipeOptions);
+  if (!graph.recipeNodes.size) return { status: 'no-recipes', graph, timings: { t0: _t0 } };
   const _t1 = performance.now();
-  logS(`Graph: ${graph.recipeNodes.size} recipes, ${graph.itemNodes.size} items`);
 
-  // ─── Phase 1b: Pinned items ──────────────────────────────────────────
-  // Fixed items (locked or tempPinnedId) produce at a user-set rate.
-  // They get an equal: constraint instead of min: 0.
-  // Exception: a fixed item at rate ≈ 0 is excluded from pinnedIds so the
-  // LP treats it as free — locking/dragging to exactly 0 is almost always
-  // unintentional and a equal: 0 equality just wastes a LP slot.
-  // If the rate exceeds the computed maxRate (e.g. due to step rounding),
-  // cap the equality target at maxRate so the LP stays feasible.
-  // trulyFixedIds: user-locked items → get equal: constraints (unchanged).
-  // pinnedIds: also includes all >0 items when pinAll=true → get equal: constraints.
-  // trulyFixedIds always carries into pinAll so locked-at-0 items keep equal:0
-  // and don't get produced as free co-products during the read-only solve.
-  const trulyFixedIds = new Set(production.filter(isFixed).map(p => p.id));
+  const trulyFixedIds = new Set(ctxProduction.filter(ctxIsFixed).map(p => p.id));
   const pinnedIds = pinAll
-    ? new Set([...production.filter(p => (p.rate || 0) > 1e-9).map(p => p.id), ...trulyFixedIds])
+    ? new Set([...ctxProduction.filter(p => (p.rate || 0) > 1e-9).map(p => p.id), ...trulyFixedIds])
     : trulyFixedIds;
-  const pinnedRates = new Map(production.filter(p => pinnedIds.has(p.id)).map(p => {
+  const pinnedRates = new Map(ctxProduction.filter(p => pinnedIds.has(p.id)).map(p => {
     const rawRate = Math.max(0, p.rate || 0);
     const mx = p.maxRate;
     return [p.id, (mx && isFinite(mx) && rawRate > mx) ? mx : rawRate];
   }));
+  const productionSet = new Set(ctxProduction.map(p => p.id));
 
-  const productionSet = new Set(production.map(p => p.id));
-
-  // ─── Phase 1c: singleMaxRate ───────────────────────────────────────────
-  // Pre-compute per-item maximum rates via mini-LPs for every priced graph
-  // item.  These become ub_net_X constraints in Phase 2 that prevent the LP
-  // becoming Unbounded when self-sustaining cycles (e.g. the moss/seed loop)
-  // exist without any raw or facility caps.
-  //
-  // _singleMaxDirty is set by invalidateMaxCache() and cleared here after a
-  // full rebuild.  During drag, the flag stays false, so this block is skipped
-  // entirely — single=0.0ms in the timing log confirms the fast path.
-  if (_singleMaxDirty) {
-    _singleMaxMap = {};
-    graph.itemNodes.forEach((info, iid) => {
-      if (info.isRawMaterial) return;
-      if (!productionSet.has(iid)) return;
-      const ck = _maxCacheKey(iid);
-      if (_maxCache.has(ck)) { _singleMaxMap[iid] = _maxCache.get(ck); return; }
-      const v = solveItemMax(iid, graph);
-      const final = (typeof v === 'number' && isFinite(v) && v >= 0) ? v : 1e6;
-      _singleMaxMap[iid] = final;
-      _maxCache.set(ck, final);
-    });
-    _singleMaxDirty = false;
-  }
-  const singleMaxRate = _singleMaxMap;
+  const singleMaxRate = {};
+  graph.itemNodes.forEach((info, iid) => {
+    if (info.isRawMaterial) return;
+    if (!productionSet.has(iid)) return;
+    const ck = _maxCacheKey(iid, context);
+    if (_maxCache.has(ck)) { singleMaxRate[iid] = _maxCache.get(ck); return; }
+    const v = solveItemMax(iid, graph, context);
+    const final = (typeof v === 'number' && isFinite(v) && v >= 0) ? v : 1e6;
+    singleMaxRate[iid] = final;
+    _maxCache.set(ck, final);
+  });
   const _t2 = performance.now();
 
-  // ─── Phase 2: Build LP ───────────────────────────────────────────────
-  // One variable x_ri per recipe (facility count, ≥ 0 by default in CPLEX LP).
   const recipeList = [...graph.recipeNodes.values()];
   const constraints = {};
   const variables = {};
-  const generals = []; // x_ri names to declare as integers (MIP); populated by integerOnly facilities
+  const generals = [];
   recipeList.forEach((_, ri) => { variables[`x_${ri}`] = {}; });
 
-  // Balance constraints: net_production(item) >= 0 for every non-raw item.
-  // Pinned items use equality at their locked rate so the LP honours them.
-  // The net production of item X for recipe r is:
-  //   output_rate(r, X) − input_rate(r, X)    [per facility per minute]
   graph.itemNodes.forEach((info, iid) => {
     if (info.isRawMaterial) return;
     const cName = `bal_${iid}`;
@@ -878,59 +926,79 @@ function runSolver(inPlace = false, pinAll = false) {
     recipeList.forEach((r, ri) => {
       let coef = 0;
       (r.outputs || []).forEach(o => { if (o.itemId === iid) coef += calcRate(o.amount, r.craftingTime); });
-      (r.inputs  || []).forEach(i => { if (i.itemId === iid) coef -= calcRate(i.amount, r.craftingTime); });
+      (r.inputs || []).forEach(i => { if (i.itemId === iid) coef -= calcRate(i.amount, r.craftingTime); });
       if (Math.abs(coef) > 1e-12) {
         variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) + coef;
         hasCoef = true;
       }
     });
-    if (hasCoef) constraints[cName] = pinnedIds.has(iid) ? { equal: pinnedRates.get(iid) || 0 } : { min: 0 };
+    if (hasCoef) {
+      if (pinnedIds.has(iid)) {
+        const pinnedRate = pinnedRates.get(iid) || 0;
+        constraints[cName] = pinTolerance > 0
+          ? { min: Math.max(0, pinnedRate - pinTolerance), max: pinnedRate + pinTolerance }
+          : { equal: pinnedRate };
+      } else if (forcedDisposalSet.has(iid) && !productionSet.has(iid)) {
+        // Forced-disposal fluids must be consumed by a recycler or treatment
+        // sink when they are produced. Otherwise the LP can leave positive
+        // net sewage/effluent with no facility usage, which hides the real
+        // Water Treatment burden from the detail panel.
+        constraints[cName] = { equal: 0 };
+      } else {
+        constraints[cName] = { min: 0 };
+      }
+    }
   });
 
-  // Raw material caps and facility caps are skipped for pinAll solves —
-  // we only want facility counts for the given rates; limits would cause
-  // infeasibility when resources are fully saturated.
-  if (!pinAll) {
-    // Raw material caps: Σ consumption across all recipes <= user-set cap.
-    rawLimits.forEach(rl => {
-      const cName = `raw_${rl.matId}`;
-      constraints[cName] = { max: rl.cap };
+  if (options.respectProductionMaxRate) {
+    ctxProduction.forEach(p => {
+      if (pinnedIds.has(p.id)) return;
+      const maxRate = Number(p.maxRate);
+      if (!isFinite(maxRate) || maxRate < 0) return;
+      const cName = `prod_ub_${p.id}`;
+      let hasCoef = false;
       recipeList.forEach((r, ri) => {
-        const inp = (r.inputs || []).find(i => i.itemId === rl.matId);
-        if (inp) variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) + calcRate(inp.amount, r.craftingTime);
+        let coef = 0;
+        (r.outputs || []).forEach(o => { if (o.itemId === p.id) coef += calcRate(o.amount, r.craftingTime); });
+        (r.inputs || []).forEach(i => { if (i.itemId === p.id) coef -= calcRate(i.amount, r.craftingTime); });
+        if (Math.abs(coef) > 1e-12) {
+          variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) + coef;
+          hasCoef = true;
+        }
       });
-    });
-
-    // Facility caps: Σ facility counts <= user-set cap.
-    facilityLimits.forEach(f => {
-      const cName = `fac_${f.gameFacilityId}`;
-      constraints[cName] = { max: f.cap };
-      recipeList.forEach((r, ri) => {
-        if (r.facilityId === f.gameFacilityId)
-          variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) + 1;
-      });
-    });
-
-    // Integer-only: facility counts must be whole numbers for flagged facilities.
-    facilityLimits.forEach(f => {
-      if (!f.integerOnly) return;
-      recipeList.forEach((r, ri) => {
-        if (r.facilityId === f.gameFacilityId) generals.push(`x_${ri}`);
-      });
+      if (hasCoef) constraints[cName] = { max: maxRate };
     });
   }
 
-  // Upper bounds on net production for every priced graph item.
-  // Without these, a self-sustaining cycle (no raw/facility cap) makes the
-  // profit objective unbounded.  singleMaxRate[X] is the tightest bound from
-  // mini-LP or facility ceiling; mx === undefined/null/Infinity means no
-  // meaningful bound so we skip the constraint entirely.
-  // Note: mx=0 IS a valid bound (facility cap=0) and must NOT be skipped.
-  // Skipped entirely for pinAll: all non-zero items already have equal: constraints.
+  ctxRawLimits.forEach(rl => {
+    const cName = `raw_${rl.matId}`;
+    constraints[cName] = { max: rl.cap };
+    recipeList.forEach((r, ri) => {
+      const inp = (r.inputs || []).find(i => i.itemId === rl.matId);
+      if (inp) variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) + calcRate(inp.amount, r.craftingTime);
+    });
+  });
+
+  ctxFacilityLimits.forEach(f => {
+    const cName = `fac_${f.gameFacilityId}`;
+    constraints[cName] = { max: f.cap };
+    recipeList.forEach((r, ri) => {
+      if (r.facilityId === f.gameFacilityId)
+        variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) + 1;
+    });
+  });
+
+  ctxFacilityLimits.forEach(f => {
+    if (!f.integerOnly) return;
+    recipeList.forEach((r, ri) => {
+      if (r.facilityId === f.gameFacilityId) generals.push(`x_${ri}`);
+    });
+  });
+
   graph.itemNodes.forEach((info, iid) => {
     if (pinAll) return;
     if (info.isRawMaterial) return;
-    if (pinnedIds.has(iid)) return; // pinned items are already equality-constrained
+    if (pinnedIds.has(iid)) return;
     const mx = singleMaxRate[iid];
     if (mx === undefined || mx === null || !isFinite(mx)) return;
     const cName = `ub_net_${iid}`;
@@ -938,7 +1006,7 @@ function runSolver(inPlace = false, pinAll = false) {
     recipeList.forEach((r, ri) => {
       let coef = 0;
       (r.outputs || []).forEach(o => { if (o.itemId === iid) coef += calcRate(o.amount, r.craftingTime); });
-      (r.inputs  || []).forEach(i => { if (i.itemId === iid) coef -= calcRate(i.amount, r.craftingTime); });
+      (r.inputs || []).forEach(i => { if (i.itemId === iid) coef -= calcRate(i.amount, r.craftingTime); });
       if (Math.abs(coef) > 1e-12) {
         variables[`x_${ri}`][cName] = (variables[`x_${ri}`][cName] || 0) + coef;
         hasCoef = true;
@@ -947,20 +1015,13 @@ function runSolver(inPlace = false, pinAll = false) {
     if (hasCoef) constraints[cName] = { max: mx };
   });
 
-  // Profit objective: Σ price(item) × net_production(item) over production targets only.
-  // Intermediate items are not sold even if a price is set for them.
-  // Pinned items contribute a constant (price × pinnedRate) — omitting them
-  // from the objective coefficients is safe because argmax is unaffected by
-  // constants.
   const TARGET_WEIGHT = getSolverWeight('target');
-  // When "Prioritize Unsellable" is on, assign exponentially decreasing weights to
-  // zero-price production targets in pane order so each dominates all lower-ranked
-  // targets and profit (1e9 >> max_profit; ratio 1000 >> max_rate per item).
   const priorityWeightMap = new Map();
-  if (!pinAll && typeof prioritizeUnsellableOn === 'function' && prioritizeUnsellableOn()) {
+  const prioritizeUnsellable = options.prioritizeUnsellable ?? context.prioritizeUnsellable;
+  if (!pinAll && prioritizeUnsellable) {
     let rank = 0;
-    production.forEach(p => {
-      if (priceOf(p.id) <= 0 && productionSet.has(p.id) && !pinnedIds.has(p.id)) {
+    ctxProduction.forEach(p => {
+      if (ctxPriceOf(p.id) <= 0 && productionSet.has(p.id) && !pinnedIds.has(p.id)) {
         priorityWeightMap.set(p.id, 1e9 / Math.pow(1000, rank++));
       }
     });
@@ -968,7 +1029,7 @@ function runSolver(inPlace = false, pinAll = false) {
   graph.itemNodes.forEach((info, iid) => {
     if (info.isRawMaterial) return;
     if (pinnedIds.has(iid)) return;
-    const pr = priceOf(iid);
+    const pr = ctxPriceOf(iid);
     const effectivePrice = (pr > 0 && productionSet.has(iid)) ? pr
       : priorityWeightMap.has(iid) ? priorityWeightMap.get(iid)
       : (productionSet.has(iid) && TARGET_WEIGHT > 0 ? TARGET_WEIGHT : 0);
@@ -976,30 +1037,16 @@ function runSolver(inPlace = false, pinAll = false) {
     recipeList.forEach((r, ri) => {
       let coef = 0;
       (r.outputs || []).forEach(o => { if (o.itemId === iid) coef += calcRate(o.amount, r.craftingTime); });
-      (r.inputs  || []).forEach(i => { if (i.itemId === iid) coef -= calcRate(i.amount, r.craftingTime); });
+      (r.inputs || []).forEach(i => { if (i.itemId === iid) coef -= calcRate(i.amount, r.craftingTime); });
       if (Math.abs(coef) > 1e-12)
         variables[`x_${ri}`].profit = (variables[`x_${ri}`].profit || 0) + effectivePrice * coef;
     });
   });
 
-  // Surplus penalty for zero-price dead-end items.
-  //
-  // Items produced by the LP with no downstream consumer AND no price are
-  // pure waste (e.g. copper_nugget when only sewage is needed from copper
-  // smelting).  Without penalty, the LP may waste raw materials generating
-  // them.  A surplus variable absorbs net production; its coefficient in the
-  // objective is -SURPLUS_PENALTY, nudging the LP to avoid overproducing.
-  //
-  // Dead-end criteria: not a production target, not priced, not consumed by
-  // any recipe in the graph.  The balance constraint is promoted from >= 0
-  // to = 0 so the surplus variable is the only escape valve.
   const SURPLUS_PENALTY = getSolverWeight('surplus');
   const MACHINE_PENALTY = getSolverWeight('machine');
-  const POWER_WEIGHT    = getSolverWeight('power');
+  const POWER_WEIGHT = getSolverWeight('power');
 
-  // Per-facility cost: base machine penalty + optional power-proportional term.
-  // Total penalty = MACHINE_PENALTY + POWER_WEIGHT * facility_power_kw.
-  // This steers the LP toward lower-power paths when profit is equal.
   recipeList.forEach((r, ri) => {
     const powerKw = facilityTypeById[r.facilityId]?.power ?? 0;
     const penalty = MACHINE_PENALTY + POWER_WEIGHT * powerKw;
@@ -1013,83 +1060,113 @@ function runSolver(inPlace = false, pinAll = false) {
   graph.itemNodes.forEach((info, iid) => {
     if (info.isRawMaterial) return;
     if (pinnedIds.has(iid)) return;
-    if (productionSet.has(iid)) return;   // production targets are never treated as waste
-    if (priceOf(iid) > 0) return;         // priced items: profit objective already governs them
-    if (itemsConsumed.has(iid)) return;   // consumed downstream: not a pure dead end
+    if (productionSet.has(iid)) return;
+    if (ctxPriceOf(iid) > 0) return;
+    if (itemsConsumed.has(iid)) return;
     const cName = `bal_${iid}`;
     if (!constraints[cName]) return;
-    constraints[cName] = { equal: 0 };   // promote >= 0 to = 0
+    constraints[cName] = { equal: 0 };
     const sv = `surp_${iid}`;
     variables[sv] = { [cName]: -1, profit: -SURPLUS_PENALTY };
   });
 
-  if (window._DEBUG_LP) {
-    console.group('[LP debug]');
-    console.log('variables:', Object.keys(variables).length, 'constraints:', Object.keys(constraints).length);
-    console.log('model:', JSON.stringify({ constraints, variables }, null, 2));
-    console.groupEnd();
-  }
-
-  // ─── Phase 3: Solve ──────────────────────────────────────────────────
-  // pinAll: minimise total facility count (no profit/bounds needed — just find
-  // the minimal feasible solution for the equality-constrained rates).
   if (pinAll) recipeList.forEach((_, ri) => { variables[`x_${ri}`].profit = 1; });
   const model = { optimize: 'profit', opType: pinAll ? 'min' : 'max', constraints, variables, generals };
   let result;
-  try { result = solveLP(model); } catch (e) { logS('LP solver error: ' + e, 'err'); return; }
-  if (!result?.feasible) {
-    logS('LP infeasible — check constraints.', 'err');
-    if (typeof markInfeasibleItem === 'function') markInfeasibleItem(_lastChangedProdId);
-    return;
+  try {
+    result = solveLP(model);
+  } catch (e) {
+    return { status: 'error', error: String(e), graph, model, timings: { t0: _t0, t1: _t1, t2: _t2 } };
   }
-  if (typeof markInfeasibleItem === 'function') markInfeasibleItem(null);
+  if (!result?.feasible) return { status: 'infeasible', graph, model, result, timings: { t0: _t0, t1: _t1, t2: _t2 } };
   const _t3 = performance.now();
 
-  // ─── Phase 4: Extract results ────────────────────────────────────────
-  // Map each recipe's x_ri solution value to a facility count.
-  // Values below 1e-9 are LP noise — treat as zero.
   const recipeFacilityCounts = new Map();
   recipeList.forEach((r, ri) => {
     const v = result[`x_${ri}`];
     recipeFacilityCounts.set(r.id, typeof v === 'number' && v > 1e-9 ? v : 0);
   });
 
-  // ─── Phase 5: Sanity check ───────────────────────────────────────────
-  // Skipped for pinAll: limits were removed from the LP intentionally.
-  if (!pinAll) {
-    const { rawUse, facUse } = rawAndFacilityUsage(recipeFacilityCounts, graph);
-    let violation = null;
-    rawLimits.forEach(rl => {
-      if ((rawUse[rl.matId] || 0) > rl.cap + 0.5 && !violation)
-        violation = `Raw ${rl.matId}: used ${(rawUse[rl.matId]||0).toFixed(2)}, cap ${rl.cap}`;
-    });
-    facilityLimits.forEach(f => {
-      if ((facUse[f.gameFacilityId] || 0) > f.cap + 0.5 && !violation)
-        violation = `Facility ${f.gameFacilityId}: ${(facUse[f.gameFacilityId]||0).toFixed(2)} / ${f.cap}`;
-    });
-    if (violation) { logS(`Constraint violation: ${violation}`, 'err'); return; }
+  const { rawUse, facUse } = rawAndFacilityUsage(recipeFacilityCounts, graph);
+  let violation = null;
+  ctxRawLimits.forEach(rl => {
+    if ((rawUse[rl.matId] || 0) > rl.cap + 0.5 && !violation)
+      violation = `Raw ${rl.matId}: used ${(rawUse[rl.matId] || 0).toFixed(2)}, cap ${rl.cap}`;
+  });
+  ctxFacilityLimits.forEach(f => {
+    if ((facUse[f.gameFacilityId] || 0) > f.cap + 0.5 && !violation)
+      violation = `Facility ${f.gameFacilityId}: ${(facUse[f.gameFacilityId] || 0).toFixed(2)} / ${f.cap}`;
+  });
+  if (violation) {
+    return { status: 'violation', violation, graph, model, result, recipeFacilityCounts, rawUse, facUse, timings: { t0: _t0, t1: _t1, t2: _t2, t3: _t3 } };
   }
 
-  // ─── Phase 6: Apply ──────────────────────────────────────────────────
-  // Cache the solved graph and counts for computeSummary / usage bars.
+  const netRates = computeNetRatesFromFlow(recipeFacilityCounts, graph);
+  return {
+    status: 'optimal',
+    pinAll,
+    pinTolerance,
+    graph,
+    model,
+    result,
+    recipeFacilityCounts,
+    netRates,
+    rawUse,
+    facUse,
+    graphRecipeCount: graph.recipeNodes.size,
+    graphItemCount: graph.itemNodes.size,
+    context,
+    timings: { t0: _t0, t1: _t1, t2: _t2, t3: _t3 },
+  };
+}
+
+function applySolvedModelToLegacyUi(solved, inPlace, pinAll) {
+  if (solved.status === 'empty') {
+    logS('No production items.', 'err');
+    return solverResultSnapshot('empty');
+  }
+  if (solved.status === 'pending') {
+    _pendingSolve = { inPlace, pinAll };
+    return solverResultSnapshot('pending');
+  }
+  if (solved.status === 'no-recipes') {
+    logS('No recipes found.', 'err');
+    return solverResultSnapshot('no-recipes');
+  }
+  if (solved.status === 'error') {
+    logS('LP solver error: ' + solved.error, 'err');
+    return solverResultSnapshot('error', null, null, { error: solved.error });
+  }
+  if (solved.status === 'infeasible') {
+    logS('LP infeasible — check constraints.', 'err');
+    if (typeof markInfeasibleItem === 'function') markInfeasibleItem(_lastChangedProdId);
+    return solverResultSnapshot('infeasible');
+  }
+  if (typeof markInfeasibleItem === 'function') markInfeasibleItem(null);
+  if (solved.status === 'violation') {
+    logS(`Constraint violation: ${solved.violation}`, 'err');
+    return solverResultSnapshot('violation', null, null, { violation: solved.violation });
+  }
+  if (solved.status !== 'optimal') {
+    return solverResultSnapshot(solved.status || 'unknown');
+  }
+
+  const { graph, recipeFacilityCounts, netRates, timings } = solved;
+  const _t0 = timings.t0;
+  const _t1 = timings.t1;
+  const _t2 = timings.t2;
+  const _t3 = timings.t3;
+  logS(`Graph: ${solved.graphRecipeCount} recipes, ${solved.graphItemCount} items`);
+
   _lastGraph = graph;
   _lastFacilityCounts = recipeFacilityCounts;
-  _lastSolvedRates = null; // cleared now; set after p.rate is written below
-
   _lastSolvedRates = Object.fromEntries(production.map(p => [p.id, p.rate]));
 
   if (pinAll) {
-    // Read-only solve: just update summaries, don't touch production state.
     computeSummary();
-    return;
+    return solverResultSnapshot('optimal', graph, recipeFacilityCounts, { pinAll: true });
   }
 
-  // Compute net rates from the LP solution, then write p.rate.
-  // Snap LP residuals below 1e-3 to exactly 0: LP arithmetic can leave tiny
-  // positive values (e.g. 3.7e-7) for items the solver chose not to produce.
-  // Snapping ensures sliders and the summary table always agree — without this,
-  // an item "at 0" might show 0.001 on the slider during drag.
-  const netRates = computeNetRatesFromFlow(recipeFacilityCounts, graph);
   production.forEach(p => {
     if (isFixed(p)) return;
     const raw = Math.max(0, netRates[p.id] || 0);
@@ -1098,8 +1175,7 @@ function runSolver(inPlace = false, pinAll = false) {
   });
   _lastSolvedRates = Object.fromEntries(production.map(p => [p.id, p.rate]));
 
-  // Log income, net (after battery cost and outpost fixed cost), and timing.
-  const outpostCost = parseFloat((document.getElementById('outpost-cost')?.value||'').replace(/,/g,'')) || 0;
+  const outpostCost = parseFloat((document.getElementById('outpost-cost')?.value || '').replace(/,/g, '')) || 0;
   const incomeHr = production.reduce((s, p) => s + priceOf(p.id) * Math.max(0, p.rate) * 60, 0);
   const batCostHr = powerBatteries.reduce((s, pb) => s + pb.rate * priceOf(pb.matId) * 60, 0);
   const netHr = incomeHr - outpostCost - batCostHr;
@@ -1111,5 +1187,34 @@ function runSolver(inPlace = false, pinAll = false) {
   if (inPlace) updateSlidersInPlace(); else renderProducts();
   const _t4 = performance.now();
   const _lag = _lastInputT ? (_t4 - _lastInputT).toFixed(1) : '—';
-  logS(`Done. graph=${(_t1-_t0).toFixed(1)}ms single=${(_t2-_t1).toFixed(1)}ms lp=${(_t3-_t2).toFixed(1)}ms render=${(_t4-_t3).toFixed(1)}ms · lag=${_lag}ms`, 'ok');
+  logS(`Done. graph=${(_t1 - _t0).toFixed(1)}ms single=${(_t2 - _t1).toFixed(1)}ms lp=${(_t3 - _t2).toFixed(1)}ms render=${(_t4 - _t3).toFixed(1)}ms · lag=${_lag}ms`, 'ok');
+  return solverResultSnapshot('optimal', graph, recipeFacilityCounts, {
+    incomePerHour: incomeHr,
+    netPerHour: netHr,
+    solveMs: _t3 - _t2,
+    totalMs: _t4 - _t0,
+  });
 }
+
+// runSolver: legacy UI wrapper around solveProductionModel.
+// The solving work now happens in solveProductionModel; this function clears
+// the log, applies the result to the existing AIC-style UI state, and renders.
+//
+// inPlace=true:  update sliders in-place (called during slider drag via
+//                runSolverThrottled); avoids full DOM rebuild.
+// inPlace=false: full renderProducts() rebuild (called after state changes).
+function runSolver(inPlace = false, pinAll = false) {
+  const logBox = document.getElementById('solver-log');
+  if (logBox) logBox.innerHTML = '';
+  return applySolvedModelToLegacyUi(solveProductionModel({ pinAll }), inPlace, pinAll);
+}
+
+globalThis.WulingSolverPipeline = {
+  calcRate,
+  compileLP,
+  computeNetRatesFromFlow,
+  rawAndFacilityUsage,
+  runSolver,
+  solveProductionModel,
+  solverResultSnapshot,
+};
