@@ -587,7 +587,7 @@
   align-items: center;
   display: grid;
   gap: 0.6rem;
-  grid-template-columns: minmax(8.5rem, 0.7fr) minmax(8rem, 1fr) minmax(4.5rem, auto);
+  grid-template-columns: minmax(7.5rem, 10rem) minmax(8rem, 1fr) minmax(4.5rem, auto);
 }
 
 .wuling-resource-row.is-stacked {
