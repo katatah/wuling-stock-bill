@@ -121,6 +121,26 @@ the shell.
   secondary in the Wuling layout, but their code paths still exist in the shell.
   Remove them only after the Wuling detail panel covers the needed diagnostics.
 
+## Design Priorities
+
+The project keeps the common solve path lightweight. The solver foundation uses
+one global LP over the recipe graph, then the Wuling scenario layer adds
+candidate comparison, deduction-aware evaluation, and buildability diagnostics
+around that result.
+
+Default behavior should favor:
+
+- comparing several useful candidates instead of presenting one opaque answer;
+- keeping exchange-design rates separate from deduction-aware final results;
+- explaining bill changes with compact visual diagnostics;
+- trying practical nearby plans where important final recipe facility counts are
+  close to integer or simple fractional values;
+- using post-solve diagnostics for physical concerns such as ports, fluids, and
+  splitters before turning them into hard constraints.
+
+This lets the UI explore many variants quickly while leaving room for stricter
+or more specialized modes later.
+
 ## Test Coverage
 
 The current tests cover:
@@ -142,13 +162,3 @@ When changing candidate generation or deduction rules, add or update tests near:
 - `test/candidate-neighborhood.test.js`
 - `test/solution-summary.test.js`
 - `test/regression-baseline.test.js`
-
-## Working Rule
-
-Reference repositories:
-
-- `../wuling-stock-bill-guide`
-- `../endfieldIndustry`
-- `../aic-solver`
-
-Use them for comparison only. The active implementation is this repository.

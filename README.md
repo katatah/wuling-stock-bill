@@ -53,7 +53,6 @@ Developer-oriented notes live in `docs/`:
 
 - [Architecture](docs/architecture.md)
 - [Candidate generation](docs/candidate-generation.md)
-- [Porting roadmap](docs/wuling-porting-roadmap.md)
 
 ## Disclaimer
 

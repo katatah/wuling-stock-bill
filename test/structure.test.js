@@ -22,6 +22,7 @@ test("app shell points at the organized source and style directories", () => {
   assert.match(html, /src="src\/ui\/candidate-controller\.js"/);
   assert.match(html, /src="src\/ui\/detail-helpers\.js"/);
   assert.match(html, /src="src\/ui\/detail-export\.js"/);
+  assert.match(html, /src="src\/ui\/fraction-plan\.js"/);
   assert.match(html, /src="src\/ui\/detail\.js"/);
   assert.match(html, /id="wuling-candidate-root"/);
   assert.match(html, /id="wuling-detail-root"/);
@@ -52,12 +53,14 @@ test("core source, style, asset, and tool files exist", () => {
     "src/ui/candidate-controller.js",
     "src/ui/detail-helpers.js",
     "src/ui/detail-export.js",
+    "src/ui/fraction-plan.js",
     "src/ui/detail.js",
     "styles/production.css",
     "styles/candidate.css",
+    "styles/fraction-plan.css",
     "styles/detail.css",
     "tools/static-server.mjs",
     "docs/architecture.md",
-    "docs/wuling-porting-roadmap.md",
+    "docs/candidate-generation.md",
   ].forEach((path) => assert.equal(existsSync(path), true, `${path} should exist`));
 });

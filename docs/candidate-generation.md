@@ -173,11 +173,26 @@ Current splitter diagnostics include:
 - one-level child rows;
 - final-recipe facility count;
 - splitter expression;
-- split/merge estimate;
+- splitter/converger estimate;
 - numeric error.
 
-The guide focuses on parent and direct-child materials. It does not attempt to
-fully explain every deeper recipe path.
+The guide starts with parent and direct-child materials and can expand into
+deeper child materials when the user needs to inspect a fractional dependency.
+
+Splitter/converger counts are buildability estimates, not LP constraints. They
+use these construction assumptions:
+
+- a splitter can be wired as either a two-way or three-way split;
+- a converger can combine up to three input lines into one output line;
+- remainder lines are eventually converged back into one line;
+- intermediate lines are converged into one line before being split again;
+- conveyor capacity, crossings, port positions, and exact physical placement are
+  intentionally ignored.
+
+Fraction candidates are filtered so the branch ratios can be constructed from
+two-way and three-way splitter trees. For example, ratios whose reduced
+denominator contains only factors of `2` and `3` are allowed, while ratios that
+require a remaining factor such as `7` are not shown as buildable hints.
 
 ## Dedupe
 
