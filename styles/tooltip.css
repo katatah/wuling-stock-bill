@@ -1,0 +1,132 @@
+.wuling-item-icon-tip {
+  align-items: center;
+  display: inline-flex;
+  line-height: 1;
+}
+
+.wuling-item-icon-tip .mat-icon {
+  cursor: help;
+}
+
+.wuling-recipe-tooltip {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(223, 209, 20, 0.08), transparent 32%),
+    rgba(9, 9, 11, 0.96);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  display: none;
+  max-height: min(70vh, 34rem);
+  overflow: auto;
+  padding: 0.65rem;
+  pointer-events: none;
+  position: fixed;
+  z-index: 10000;
+}
+
+.wuling-recipe-tooltip.is-visible {
+  display: block;
+}
+
+.wuling-recipe-tooltip-title {
+  align-items: center;
+  border-bottom: 1px solid var(--border-inner);
+  display: flex;
+  gap: 0.45rem;
+  padding-bottom: 0.45rem;
+}
+
+.wuling-recipe-tooltip-title .mat-icon {
+  height: 1.35rem;
+  width: 1.35rem;
+}
+
+.wuling-recipe-tooltip-title strong {
+  font-size: 0.82rem;
+}
+
+.wuling-recipe-tooltip section {
+  margin-top: 0.58rem;
+}
+
+.wuling-recipe-tooltip h4 {
+  color: var(--text2);
+  font-size: 0.6rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  margin: 0 0 0.28rem;
+  text-transform: uppercase;
+}
+
+.wuling-recipe-tooltip-line {
+  border-top: 1px solid var(--border-inner);
+  display: grid;
+  gap: 0.38rem;
+  grid-template-columns: minmax(6.5rem, 0.42fr) minmax(0, 1fr);
+  padding: 0.35rem 0;
+}
+
+.wuling-recipe-tooltip-line:first-of-type {
+  border-top: 0;
+}
+
+.wuling-recipe-tooltip-facility,
+.wuling-tooltip-material {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.wuling-recipe-tooltip-facility .mat-icon,
+.wuling-tooltip-material .mat-icon {
+  height: 0.95rem;
+  width: 0.95rem;
+}
+
+.wuling-recipe-tooltip-facility strong,
+.wuling-tooltip-material span {
+  font-size: 0.66rem;
+  font-weight: 800;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wuling-recipe-tooltip-facility em,
+.wuling-tooltip-material em,
+.wuling-tooltip-more,
+.wuling-tooltip-empty {
+  color: var(--text3);
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace;
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.wuling-recipe-tooltip-flow {
+  align-items: center;
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.wuling-recipe-tooltip-flow > span {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem 0.45rem;
+  min-width: 0;
+}
+
+.wuling-recipe-tooltip-flow b {
+  color: var(--accent);
+  font-size: 0.7rem;
+}
+
+.wuling-tooltip-more {
+  padding-top: 0.25rem;
+}

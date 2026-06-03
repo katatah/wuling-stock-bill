@@ -34,6 +34,10 @@
     })[char]);
   }
 
+  function escapeJsString(value) {
+    return String(value ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  }
+
   function itemMeta(itemId) {
     const item = (globalThis.ITEMS_DB || []).find((entry) => entry?.id === itemId);
     const fallbackName = item?.name || compactId(itemId);
@@ -43,11 +47,28 @@
     };
   }
 
+  function itemByIconFile(iconFile) {
+    const file = String(iconFile || "").split(/[\\/]/).pop();
+    if (!file) return null;
+    return (globalThis.ITEMS_DB || []).find((entry) => entry?.iconFile === file) || null;
+  }
+
   function itemIconHtml(itemId) {
+    const meta = itemMeta(itemId);
+    return meta.iconFile
+      ? `<span class="wuling-item-icon-tip" data-item-id="${escapeHtml(itemId)}" onmouseenter="globalThis.WulingDetailHelpers?.showItemRecipeTooltip?.(this, '${escapeJsString(itemId)}')" onmouseleave="globalThis.WulingDetailHelpers?.hideItemRecipeTooltip?.()"><img src="assets/icons/items/${escapeHtml(meta.iconFile)}" class="mat-icon" alt=""></span>`
+      : "";
+  }
+
+  function rawItemIconHtml(itemId) {
     const meta = itemMeta(itemId);
     return meta.iconFile
       ? `<img src="assets/icons/items/${escapeHtml(meta.iconFile)}" class="mat-icon" alt="">`
       : "";
+  }
+
+  function rawFacilityIconHtml(facilityId) {
+    return `<img src="assets/icons/facilities/${escapeHtml(facilityId)}.webp" class="mat-icon" alt="">`;
   }
 
   function facilityMeta(facilityId) {
@@ -65,6 +86,131 @@
 
   function recipeList() {
     return globalThis.RECIPES_DB?.recipes || [];
+  }
+
+  function recipeItems(entries) {
+    if (Array.isArray(entries)) return entries;
+    return Object.entries(entries || {}).map(([itemId, amount]) => ({ itemId, amount }));
+  }
+
+  function recipeItemListHtml(entries) {
+    const items = recipeItems(entries);
+    if (!items.length) return `<span class="wuling-tooltip-empty">-</span>`;
+    return items.map((entry) => {
+      const meta = itemMeta(entry.itemId);
+      const amount = Number(entry.amount) || 0;
+      return `<span class="wuling-tooltip-material" title="${escapeHtml(meta.name)}">${rawItemIconHtml(entry.itemId)}<span>${escapeHtml(meta.name)}</span><em>x${fmtNumber(amount, amount % 1 ? 2 : 0)}</em></span>`;
+    }).join("");
+  }
+
+  function recipeTooltipLine(recipe) {
+    const facility = facilityMeta(recipe?.facilityId);
+    const time = Number(recipe?.craftingTime) || 0;
+    return `
+      <div class="wuling-recipe-tooltip-line">
+        <span class="wuling-recipe-tooltip-facility" title="${escapeHtml(facility.name)}">${rawFacilityIconHtml(recipe?.facilityId)}<strong>${escapeHtml(facility.name)}</strong>${time ? `<em>${fmtNumber(time, time % 1 ? 1 : 0)}s</em>` : ""}</span>
+        <span class="wuling-recipe-tooltip-flow">
+          <span>${recipeItemListHtml(recipe?.inputs)}</span>
+          <b>→</b>
+          <span>${recipeItemListHtml(recipe?.outputs)}</span>
+        </span>
+      </div>
+    `;
+  }
+
+  function recipesForItem(itemId) {
+    const produces = [];
+    const uses = [];
+    for (const recipe of recipeList()) {
+      if (recipeItems(recipe?.outputs).some((entry) => entry.itemId === itemId)) produces.push(recipe);
+      if (recipeItems(recipe?.inputs).some((entry) => entry.itemId === itemId)) uses.push(recipe);
+    }
+    const sortRecipe = (a, b) => String(a?.facilityId || "").localeCompare(String(b?.facilityId || ""))
+      || String(a?.id || "").localeCompare(String(b?.id || ""));
+    return {
+      produces: produces.sort(sortRecipe),
+      uses: uses.sort(sortRecipe),
+    };
+  }
+
+  function recipeSectionHtml(title, recipes) {
+    const shown = recipes.slice(0, 6);
+    return `
+      <section>
+        <h4>${escapeHtml(title)}</h4>
+        ${shown.length ? shown.map(recipeTooltipLine).join("") : `<div class="wuling-tooltip-empty">No recipes</div>`}
+        ${recipes.length > shown.length ? `<div class="wuling-tooltip-more">+${recipes.length - shown.length} more</div>` : ""}
+      </section>
+    `;
+  }
+
+  function itemRecipeTooltipHtml(itemId) {
+    const meta = itemMeta(itemId);
+    const recipes = recipesForItem(itemId);
+    return `
+      <div class="wuling-recipe-tooltip-title">${rawItemIconHtml(itemId)}<strong>${escapeHtml(meta.name)}</strong></div>
+      ${recipeSectionHtml("Produces", recipes.produces)}
+      ${recipeSectionHtml("Used in", recipes.uses)}
+    `;
+  }
+
+  function tooltipElement() {
+    let el = document.getElementById("wuling-recipe-tooltip");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "wuling-recipe-tooltip";
+      el.className = "wuling-recipe-tooltip";
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function showItemRecipeTooltip(anchor, itemId) {
+    const el = tooltipElement();
+    el.innerHTML = itemRecipeTooltipHtml(itemId);
+    el.classList.add("is-visible");
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.min(520, Math.max(360, window.innerWidth - 24));
+    el.style.width = `${width}px`;
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width + 10));
+    const top = Math.max(8, Math.min(window.innerHeight - el.offsetHeight - 8, rect.top - 8));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }
+
+  function hideItemRecipeTooltip() {
+    const el = document.getElementById("wuling-recipe-tooltip");
+    if (el) el.classList.remove("is-visible");
+  }
+
+  function tooltipAnchorFromEvent(event) {
+    const target = event?.target;
+    if (!target?.closest) return null;
+    const wrapped = target.closest(".wuling-item-icon-tip");
+    if (wrapped?.dataset?.itemId) return { element: wrapped, itemId: wrapped.dataset.itemId };
+    const image = target.closest("img.mat-icon");
+    if (!image?.src || !/\/assets\/icons\/items\//.test(image.src.replace(/\\/g, "/"))) return null;
+    const item = itemByIconFile(image.src);
+    return item?.id ? { element: image, itemId: item.id } : null;
+  }
+
+  function installRecipeTooltipDelegation() {
+    if (typeof document === "undefined" || document.__wulingRecipeTooltipDelegated) return;
+    document.__wulingRecipeTooltipDelegated = true;
+    let activeElement = null;
+    document.addEventListener("mouseover", (event) => {
+      const anchor = tooltipAnchorFromEvent(event);
+      if (!anchor || anchor.element === activeElement) return;
+      activeElement = anchor.element;
+      showItemRecipeTooltip(anchor.element, anchor.itemId);
+    });
+    document.addEventListener("mouseout", (event) => {
+      const anchor = tooltipAnchorFromEvent(event);
+      if (!anchor || !activeElement) return;
+      if (anchor.element.contains?.(event.relatedTarget)) return;
+      activeElement = null;
+      hideItemRecipeTooltip();
+    });
   }
 
   function recipeById(result, recipeId) {
@@ -123,6 +269,8 @@
     itemColor,
     itemIconHtml,
     itemMeta,
+    showItemRecipeTooltip,
+    hideItemRecipeTooltip,
     normalizeDisplayNumber,
     outputRatePerMinute,
     ratePerUnit,
@@ -132,4 +280,5 @@
     rowsFromObject,
     scenario,
   };
+  installRecipeTooltipDelegation();
 })();

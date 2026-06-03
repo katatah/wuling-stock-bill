@@ -546,13 +546,28 @@
 }
 
 .wuling-splitter-row.is-child .wuling-splitter-item {
-  padding-left: 0.45rem;
+  padding-left: var(--splitter-indent, 0.18rem);
+}
+
+.wuling-splitter-row.has-children .wuling-splitter-item {
+  cursor: pointer;
+}
+
+.wuling-splitter-row.has-children .wuling-splitter-item:hover strong {
+  color: var(--accent);
 }
 
 .wuling-splitter-item em {
   color: var(--text3);
   font-style: normal;
   margin-right: -0.08rem;
+}
+
+.wuling-splitter-expander {
+  display: inline-flex;
+  justify-content: center;
+  margin-right: 0.02rem;
+  width: 0.55rem;
 }
 
 .wuling-splitter-item strong {

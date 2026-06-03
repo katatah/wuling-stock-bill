@@ -10,6 +10,8 @@
   let currentCandidate = null;
   let splitterMode = "nearest";
   let splitterOpen = false;
+  let splitterExpandedParents = new Set();
+  let splitterCollapsedParents = new Set();
 
   function t(key, params = {}) {
     return globalThis.WulingI18n?.t?.(key, params) ?? key;
@@ -171,6 +173,8 @@
     "#22c55e",
     "#38bdf8",
   ];
+  const SPLITTER_INITIAL_VISIBLE_DEPTH = 1;
+  const SPLITTER_MAX_DEPTH = 5;
 
   function fractionalPart(value) {
     const n = Number(value) || 0;
@@ -310,6 +314,7 @@
       if (!parentProducer?.perUnitRate) continue;
       const parentFacilityCount = Number(billRow.designRate || 0) / parentProducer.perUnitRate;
       if (!fractionalPart(parentFacilityCount)) continue;
+      const parentKey = `parent:${billRow.itemId}:${parentProducer.recipe?.id ?? ""}`;
       rows.push(splitterGuideRow({
         itemId: billRow.itemId,
         recipe: parentProducer.recipe,
@@ -318,28 +323,42 @@
         perUnitRate: parentProducer.perUnitRate,
         facilityCount: parentFacilityCount,
         depth: 0,
+        key: parentKey,
+        parentKey,
       }));
-      for (const input of parentProducer.recipe.inputs || []) {
-        const childProducer = producers[input.itemId]?.[0];
-        if (!childProducer?.perUnitRate) continue;
-        const inputRate = ratePerUnit(parentProducer.recipe, input.itemId, "input") * parentFacilityCount;
-        const childFacilityCount = inputRate / childProducer.perUnitRate;
-        if (!fractionalPart(childFacilityCount)) continue;
-        rows.push(splitterGuideRow({
-          itemId: input.itemId,
-          recipe: childProducer.recipe,
-          facilityId: childProducer.facilityId,
-          outputRate: inputRate,
-          perUnitRate: childProducer.perUnitRate,
-          facilityCount: childFacilityCount,
-          depth: 1,
-        }));
-      }
+      appendSplitterChildren(rows, producers, parentProducer, parentFacilityCount, parentKey, 1, new Set([billRow.itemId]));
     }
     return rows;
   }
 
-  function splitterGuideRow({ itemId, recipe, facilityId, outputRate, perUnitRate, facilityCount, depth }) {
+  function appendSplitterChildren(rows, producers, parentProducer, parentFacilityCount, parentKey, depth, path) {
+    if (depth > SPLITTER_MAX_DEPTH) return;
+    for (const input of parentProducer.recipe?.inputs || []) {
+      const childProducer = producers[input.itemId]?.[0];
+      if (!childProducer?.perUnitRate) continue;
+      const inputRate = ratePerUnit(parentProducer.recipe, input.itemId, "input") * parentFacilityCount;
+      const childFacilityCount = inputRate / childProducer.perUnitRate;
+      if (!fractionalPart(childFacilityCount)) continue;
+      const childKey = `child:${parentKey}:${input.itemId}:${childProducer.recipe?.id ?? ""}`;
+      rows.push(splitterGuideRow({
+        itemId: input.itemId,
+        recipe: childProducer.recipe,
+        facilityId: childProducer.facilityId,
+        outputRate: inputRate,
+        perUnitRate: childProducer.perUnitRate,
+        facilityCount: childFacilityCount,
+        depth,
+        key: childKey,
+        parentKey,
+      }));
+      if (path.has(input.itemId)) continue;
+      const nextPath = new Set(path);
+      nextPath.add(input.itemId);
+      appendSplitterChildren(rows, producers, childProducer, childFacilityCount, childKey, depth + 1, nextPath);
+    }
+  }
+
+  function splitterGuideRow({ itemId, recipe, facilityId, outputRate, perUnitRate, facilityCount, depth, key, parentKey }) {
     const fraction = fractionCandidate(fractionalPart(facilityCount), splitterMode);
     return {
       itemId,
@@ -350,6 +369,8 @@
       facilityCount,
       fraction,
       depth,
+      key,
+      parentKey,
     };
   }
 
@@ -523,6 +544,19 @@
 
   function splitterGuideHtml(candidate) {
     const rows = splitterGuideRows(candidate);
+    const childCounts = rows.reduce((acc, row) => {
+      if (row.depth && row.parentKey) acc[row.parentKey] = (acc[row.parentKey] || 0) + 1;
+      return acc;
+    }, {});
+    const rowByKey = Object.fromEntries(rows.map((row) => [row.key, row]));
+    const isRowVisible = (row) => {
+      if (!row.depth) return true;
+      if (splitterCollapsedParents.has(row.parentKey)) return false;
+      if (row.depth <= SPLITTER_INITIAL_VISIBLE_DEPTH) return true;
+      const parent = rowByKey[row.parentKey];
+      return !!parent && isRowVisible(parent) && splitterExpandedParents.has(row.parentKey);
+    };
+    const visibleRows = rows.filter(isRowVisible);
     return `
       <details class="wuling-detail-card wuling-splitter-card is-wide" ${splitterOpen ? "open" : ""} ontoggle="globalThis.WulingDetailView?.setSplitterOpen?.(this.open)">
         <summary class="wuling-splitter-title">
@@ -538,12 +572,27 @@
             <div class="wuling-splitter-head">
               <span>${escapeHtml(t("detail.splitter.item"))}</span><span>${escapeHtml(t("detail.splitter.facility"))}</span><span>${escapeHtml(t("detail.splitter.output"))}</span><span>${escapeHtml(t("detail.splitter.perUnit"))}</span><span>${escapeHtml(t("detail.splitter.units"))}</span><span>${escapeHtml(t("detail.splitter.split"))}</span><span>${escapeHtml(t("detail.splitter.splitMerge"))}</span><span>${escapeHtml(t("detail.splitter.error"))}</span>
             </div>
-            ${rows.map((row) => {
+            ${visibleRows.map((row) => {
               const meta = itemMeta(row.itemId);
               const facility = facilityMeta(row.facilityId);
+              const hasChildren = childCounts[row.key] > 0;
+              const canToggle = hasChildren;
+              if (canToggle) row.parentKey = row.key;
+              const expanded = hasChildren && (row.depth < SPLITTER_INITIAL_VISIBLE_DEPTH ? !splitterCollapsedParents.has(row.key) : splitterExpandedParents.has(row.key));
+              const itemToggle = canToggle
+                ? `role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}" onclick="globalThis.WulingDetailView?.toggleSplitterParent?.('${row.parentKey}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();globalThis.WulingDetailView?.toggleSplitterParent?.('${row.parentKey}')}"`
+                : "";
+              const branch = row.depth ? "<em>└</em>" : "";
+              const expander = canToggle
+                ? `<em class="wuling-splitter-expander">${expanded ? "▾" : "▸"}</em>`
+                : `<em class="wuling-splitter-expander"></em>`;
+              const splitterIndent = row.depth ? 0.18 + ((row.depth - 1) * 0.48) : 0;
               return `
-                <div class="wuling-splitter-row ${row.depth ? "is-child" : ""}">
-                  <span class="wuling-splitter-item" title="${escapeHtml(meta.name)}">${row.depth ? "<em>└</em>" : ""}${itemIconHtml(row.itemId)}<strong>${escapeHtml(meta.name)}</strong></span>
+                <div class="wuling-splitter-row ${row.depth ? "is-child" : ""} ${canToggle ? "has-children" : ""}" style="--splitter-indent:${splitterIndent.toFixed(2)}rem;">
+                  <span class="wuling-splitter-item" title="${escapeHtml(meta.name)}" ${itemToggle}>
+                    ${branch}${expander}
+                    ${itemIconHtml(row.itemId)}<strong>${escapeHtml(meta.name)}</strong>
+                  </span>
                   <span title="${escapeHtml(facility.name)}">${facilityIconHtml(row.facilityId)}</span>
                   <span>${fmtNumber(row.outputRate, row.outputRate % 1 ? 2 : 0)}/m</span>
                   <span>${fmtNumber(row.perUnitRate, row.perUnitRate % 1 ? 2 : 0)}/m</span>
@@ -567,14 +616,65 @@
   function setSplitterMode(value) {
     if (!["nearest", "over", "under"].includes(value)) return;
     splitterMode = value;
-    if (currentCandidate) {
-      const container = document.getElementById("wuling-detail-root") ?? document.querySelector(".wuling-detail-view")?.parentElement;
-      if (container) render(container, currentCandidate);
-    }
+    rerenderCurrent();
   }
 
   function setSplitterOpen(value) {
     splitterOpen = !!value;
+  }
+
+  function toggleSplitterParent(key) {
+    if (!key) return;
+    const row = currentCandidate ? splitterGuideRows(currentCandidate).find((entry) => entry.key === key) : null;
+    if (row && row.depth < SPLITTER_INITIAL_VISIBLE_DEPTH) {
+      const collapsed = new Set(splitterCollapsedParents);
+      if (collapsed.has(key)) {
+        collapsed.delete(key);
+      } else {
+        collapsed.add(key);
+        const expanded = new Set(splitterExpandedParents);
+        for (const descendantKey of splitterDescendantKeys(key)) expanded.delete(descendantKey);
+        splitterExpandedParents = expanded;
+      }
+      splitterCollapsedParents = collapsed;
+      rerenderCurrent();
+      return;
+    }
+    const next = new Set(splitterExpandedParents);
+    if (next.has(key)) {
+      next.delete(key);
+      for (const descendantKey of splitterDescendantKeys(key)) next.delete(descendantKey);
+    } else {
+      next.add(key);
+    }
+    splitterExpandedParents = next;
+    rerenderCurrent();
+  }
+
+  function splitterDescendantKeys(parentKey) {
+    if (!currentCandidate) return [];
+    const rows = splitterGuideRows(currentCandidate);
+    const childrenByParent = rows.reduce((acc, row) => {
+      if (!row.parentKey || row.parentKey === row.key) return acc;
+      acc[row.parentKey] ??= [];
+      acc[row.parentKey].push(row.key);
+      return acc;
+    }, {});
+    const descendants = [];
+    const stack = [...(childrenByParent[parentKey] || [])];
+    while (stack.length) {
+      const key = stack.pop();
+      descendants.push(key);
+      stack.push(...(childrenByParent[key] || []));
+    }
+    return descendants;
+  }
+
+  function rerenderCurrent() {
+    if (currentCandidate) {
+      const container = document.getElementById("wuling-detail-root") ?? document.querySelector(".wuling-detail-view")?.parentElement;
+      if (container) render(container, currentCandidate);
+    }
   }
 
   function facilityCardsHtml(candidate, entries) {
@@ -687,5 +787,6 @@
     render,
     setSplitterMode,
     setSplitterOpen,
+    toggleSplitterParent,
   };
 })();
