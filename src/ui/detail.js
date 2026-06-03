@@ -217,16 +217,223 @@
     return Math.max(0, Math.ceil((branchesToReturn - 1) / 2));
   }
 
+  function gcd(a, b) {
+    let x = Math.abs(Math.trunc(a));
+    let y = Math.abs(Math.trunc(b));
+    while (y) {
+      const next = x % y;
+      x = y;
+      y = next;
+    }
+    return x || 1;
+  }
+
+  function fractionLabel(numerator, denominator) {
+    const n = Math.trunc(numerator);
+    const d = Math.trunc(denominator) || 1;
+    const divisor = gcd(n, d);
+    const reducedN = n / divisor;
+    const reducedD = d / divisor;
+    if (reducedD === 1) return String(reducedN);
+    return `${reducedN}/${reducedD}`;
+  }
+
+  function ratioKey(numerator, denominator) {
+    const divisor = gcd(numerator, denominator);
+    return `${Math.trunc(numerator / divisor)}/${Math.trunc(denominator / divisor)}`;
+  }
+
+  function hasOnlySplitterPrimeFactors(denominator) {
+    let value = Math.abs(Math.trunc(denominator)) || 1;
+    while (value > 1 && value % 2 === 0) value /= 2;
+    while (value > 1 && value % 3 === 0) value /= 3;
+    return value === 1;
+  }
+
+  function parseRatio(label) {
+    const text = String(label || "").trim();
+    if (!text || text === "input") return null;
+    if (/^\d+$/.test(text)) return { numerator: Number(text), denominator: 1 };
+    const match = text.match(/^(\d+)\/(\d+)$/);
+    if (!match) return null;
+    return {
+      numerator: Number(match[1]),
+      denominator: Number(match[2]) || 1,
+    };
+  }
+
+  function isBuildableBranchRatio(label) {
+    const ratio = parseRatio(label);
+    if (!ratio) return true;
+    const [, denominator] = ratioKey(ratio.numerator, ratio.denominator).split("/").map(Number);
+    return hasOnlySplitterPrimeFactors(denominator);
+  }
+
+  const ratioCostMemo = new Map();
+
+  function combineLineCost(count) {
+    return mergeCountForBranches(count);
+  }
+
+  function ratioConstructionCost(label) {
+    const ratio = parseRatio(label);
+    if (!ratio) return { splitters: 0, convergers: 0 };
+    const [numerator, denominator] = ratioKey(ratio.numerator, ratio.denominator).split("/").map(Number);
+    return constructionCost(numerator, denominator);
+  }
+
+  function constructionCost(numerator, denominator) {
+    const n = Math.max(0, Math.min(Math.trunc(numerator), Math.trunc(denominator)));
+    const d = Math.max(1, Math.trunc(denominator));
+    const key = `${n}/${d}`;
+    if (ratioCostMemo.has(key)) return ratioCostMemo.get(key);
+    if (n === 0 || n === d) {
+      const result = { splitters: 0, convergers: 0 };
+      ratioCostMemo.set(key, result);
+      return result;
+    }
+    const options = [];
+    if (d % 2 === 0) options.push(splitConstructionCost(n, d, 2));
+    if (d % 3 === 0) options.push(splitConstructionCost(n, d, 3));
+    const result = options
+      .filter(Boolean)
+      .sort((a, b) => (a.splitters + a.convergers) - (b.splitters + b.convergers)
+        || a.splitters - b.splitters
+        || a.convergers - b.convergers)[0] ?? { splitters: 0, convergers: 0 };
+    ratioCostMemo.set(key, result);
+    return result;
+  }
+
+  function splitConstructionCost(numerator, denominator, parts) {
+    const childSize = denominator / parts;
+    let best = null;
+    const allocations = [];
+    const walk = (index, remaining, current) => {
+      if (index === parts - 1) {
+        if (remaining >= 0 && remaining <= childSize) allocations.push([...current, remaining]);
+        return;
+      }
+      const min = Math.max(0, remaining - (parts - index - 1) * childSize);
+      const max = Math.min(childSize, remaining);
+      for (let value = min; value <= max; value += 1) {
+        current.push(value);
+        walk(index + 1, remaining - value, current);
+        current.pop();
+      }
+    };
+    walk(0, numerator, []);
+    for (const allocation of allocations) {
+      let splitters = 1;
+      let convergers = 0;
+      let selectedLines = 0;
+      let remainderLines = 0;
+      for (const selected of allocation) {
+        const remainder = childSize - selected;
+        if (selected > 0) selectedLines += 1;
+        if (remainder > 0) remainderLines += 1;
+        if (selected > 0 && remainder > 0) {
+          const cost = constructionCost(selected, childSize);
+          splitters += cost.splitters;
+          convergers += cost.convergers;
+        }
+      }
+      convergers += combineLineCost(selectedLines);
+      convergers += combineLineCost(remainderLines);
+      const candidate = { splitters, convergers };
+      if (!best
+        || (candidate.splitters + candidate.convergers) < (best.splitters + best.convergers)
+        || ((candidate.splitters + candidate.convergers) === (best.splitters + best.convergers)
+          && candidate.splitters < best.splitters)) {
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  function splitterPlan(terms, complement = false) {
+    if (!terms.length) {
+      return {
+        planExpression: "0",
+        tree: { type: "zero", value: 0 },
+        steps: [],
+      };
+    }
+    if (terms.length === 1) {
+      const [a] = terms;
+      const take = `1/${a}`;
+      const remainder = fractionLabel(a - 1, a);
+      return complement
+        ? {
+          planExpression: remainder,
+          tree: { type: "remainder", from: "1", after: take, value: remainder },
+          steps: [{ action: "split", from: "input", take, use: remainder, remainder: take }],
+        }
+        : {
+          planExpression: take,
+          tree: { type: "take", from: "1", take },
+          steps: [{ action: "split", from: "input", take, use: take, remainder }],
+        };
+    }
+    const [a, b] = terms;
+    const first = `1/${a}`;
+    const remainder = fractionLabel(a - 1, a);
+    const secondRatio = fractionLabel(a, b * (a - 1));
+    const second = `${remainder} × ${secondRatio}`;
+    const secondRemainder = `1 - ${secondRatio}`;
+    return complement
+      ? {
+        planExpression: `${remainder} × (${secondRemainder})`,
+        tree: {
+          type: "chain",
+          use: false,
+          first,
+          remainder,
+          next: { take: secondRatio, use: false },
+        },
+        steps: [
+          { action: "split", from: "input", take: first, use: null, remainder },
+          { action: "split", from: remainder, take: secondRatio, use: `${remainder} × (${secondRemainder})`, remainder: `${remainder} × ${secondRatio}` },
+        ],
+      }
+      : {
+        planExpression: `${first} + ${second}`,
+        tree: {
+          type: "chain",
+          use: true,
+          first,
+          remainder,
+          next: { take: secondRatio, use: true },
+        },
+        steps: [
+          { action: "split", from: "input", take: first, use: first, remainder },
+          { action: "split", from: remainder, take: secondRatio, use: second, remainder: `${remainder} × (${secondRemainder})` },
+        ],
+      };
+  }
+
   function enrichFractionCandidate(entry, target) {
-    const splitCount = entry.terms.reduce((sum, denominator) => sum + splitterDepth(denominator), 0);
-    const remainderBranches = entry.terms.reduce((sum, denominator) => sum + splitterRemainderBranches(denominator), 0);
+    const plan = splitterPlan(entry.terms, entry.complement);
+    const constructionCost = plan.steps.reduce((acc, step) => {
+      const cost = ratioConstructionCost(step.take);
+      return {
+        splitters: acc.splitters + cost.splitters,
+        convergers: acc.convergers + cost.convergers,
+      };
+    }, { splitters: 0, convergers: 0 });
     return {
       ...entry,
+      planExpression: plan.planExpression,
+      tree: plan.tree,
+      steps: plan.steps,
       error: entry.value - target,
       absError: Math.abs(entry.value - target),
-      splitCount,
-      mergeCount: mergeCountForBranches(remainderBranches),
+      splitCount: constructionCost.splitters,
+      mergeCount: constructionCost.convergers,
     };
+  }
+
+  function isBuildableFractionCandidate(entry) {
+    return (entry.steps || []).every((step) => isBuildableBranchRatio(step.take));
   }
 
   function fractionCandidate(value, mode = "nearest") {
@@ -250,12 +457,16 @@
     }
     const filtered = candidates
       .map((entry) => enrichFractionCandidate(entry, target))
+      .filter(isBuildableFractionCandidate)
       .filter((entry) => {
         if (mode === "over") return entry.error >= -1e-9;
         if (mode === "under") return entry.error <= 1e-9;
         return true;
       });
-    const best = (filtered.length ? filtered : candidates.map((entry) => enrichFractionCandidate(entry, target)))
+    const buildableCandidates = candidates
+      .map((entry) => enrichFractionCandidate(entry, target))
+      .filter(isBuildableFractionCandidate);
+    const best = (filtered.length ? filtered : buildableCandidates)
       .sort((a, b) => a.absError - b.absError || a.splitCount - b.splitCount || a.expression.length - b.expression.length)[0];
     if (best.value >= 1 - 1e-9 && best.absError <= 0.005) {
       return {
@@ -270,6 +481,8 @@
       error: best.error,
       splitCount: best.splitCount,
       mergeCount: best.mergeCount,
+      tree: best.tree,
+      steps: best.steps,
     };
   }
 
@@ -570,7 +783,7 @@
         ${rows.length ? `
           <div class="wuling-splitter-table">
             <div class="wuling-splitter-head">
-              <span>${escapeHtml(t("detail.splitter.item"))}</span><span>${escapeHtml(t("detail.splitter.facility"))}</span><span>${escapeHtml(t("detail.splitter.output"))}</span><span>${escapeHtml(t("detail.splitter.perUnit"))}</span><span>${escapeHtml(t("detail.splitter.units"))}</span><span>${escapeHtml(t("detail.splitter.split"))}</span><span>${escapeHtml(t("detail.splitter.splitMerge"))}</span><span>${escapeHtml(t("detail.splitter.error"))}</span>
+              <span>${escapeHtml(t("detail.splitter.item"))}</span><span>${escapeHtml(t("detail.splitter.facility"))}</span><span>${escapeHtml(t("detail.splitter.output"))}</span><span>${escapeHtml(t("detail.splitter.perUnit"))}</span><span>${escapeHtml(t("detail.splitter.units"))}</span><span>${escapeHtml(t("detail.splitter.split"))}</span><span title="${escapeHtml(t("detail.splitter.splitMergeTitle"))}">${escapeHtml(t("detail.splitter.splitMerge"))}</span><span>${escapeHtml(t("detail.splitter.error"))}</span>
             </div>
             ${visibleRows.map((row) => {
               const meta = itemMeta(row.itemId);
@@ -587,6 +800,7 @@
                 ? `<em class="wuling-splitter-expander">${expanded ? "▾" : "▸"}</em>`
                 : `<em class="wuling-splitter-expander"></em>`;
               const splitterIndent = row.depth ? 0.18 + ((row.depth - 1) * 0.48) : 0;
+              const fractionPlan = globalThis.WulingFractionPlan?.svgHtml?.(row.fraction) ?? "";
               return `
                 <div class="wuling-splitter-row ${row.depth ? "is-child" : ""} ${canToggle ? "has-children" : ""}" style="--splitter-indent:${splitterIndent.toFixed(2)}rem;">
                   <span class="wuling-splitter-item" title="${escapeHtml(meta.name)}" ${itemToggle}>
@@ -597,7 +811,10 @@
                   <span>${fmtNumber(row.outputRate, row.outputRate % 1 ? 2 : 0)}/m</span>
                   <span>${fmtNumber(row.perUnitRate, row.perUnitRate % 1 ? 2 : 0)}/m</span>
                   <span>${fmtNumber(row.facilityCount, 2)}u</span>
-                  <span class="is-accent">${escapeHtml(row.fraction.expression)}</span>
+                  <span class="is-accent wuling-fraction-expression">
+                    ${escapeHtml(row.fraction.expression)}
+                    ${fractionPlan}
+                  </span>
                   <span>${row.fraction.splitCount || row.fraction.mergeCount ? `${row.fraction.splitCount} / ${row.fraction.mergeCount}` : "-"}</span>
                   <span>${fmtNumber(row.fraction.error, 4)}</span>
                 </div>

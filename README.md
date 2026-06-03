@@ -9,6 +9,8 @@ Bills while still being practical to build.
 
 ## What It Helps With
 
+- Explore recovery plans when Wuling Stock Bill exchanges are missed, delayed,
+  or cannot be completed as planned.
 - Compare Wuling Stock Bill production candidates side by side.
 - Check raw resource and facility usage for each candidate.
 - See how battery and equipment-part deductions change the final bill amount.

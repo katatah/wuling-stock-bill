@@ -1,0 +1,151 @@
+.wuling-fraction-expression {
+  cursor: help;
+  overflow: visible;
+  position: relative;
+}
+
+.wuling-fraction-plan {
+  background:
+    radial-gradient(circle at 20% 0%, rgba(223, 209, 20, 0.12), transparent 34%),
+    rgba(9, 9, 11, 0.98);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  display: none;
+  min-width: 20rem;
+  padding: 0.55rem;
+  pointer-events: none;
+  position: fixed;
+  z-index: 10020;
+}
+
+.wuling-fraction-plan.is-floating.is-visible {
+  display: block;
+}
+
+.wuling-fraction-plan svg {
+  display: block;
+  height: auto;
+  width: 20rem;
+}
+
+.wuling-fraction-plan .is-grid {
+  fill: url("#wuling-fraction-grid");
+  opacity: 0.34;
+}
+
+.wuling-fraction-plan pattern path {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-width: 1;
+}
+
+.wuling-fraction-plan path {
+  fill: none;
+  shape-rendering: crispEdges;
+  stroke-linecap: round;
+  stroke-width: 3.5;
+}
+
+.wuling-fraction-plan .is-input {
+  stroke: var(--text3);
+}
+
+.wuling-fraction-plan .is-use {
+  stroke: var(--accent);
+}
+
+.wuling-fraction-plan .is-carry {
+  stroke: var(--text3);
+}
+
+.wuling-fraction-plan .is-rest {
+  stroke: #38bdf8;
+}
+
+.wuling-fraction-plan .is-node {
+  fill: var(--bg);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.wuling-fraction-plan .is-splitter {
+  fill: rgba(223, 209, 20, 0.18);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.wuling-fraction-plan .is-merger {
+  fill: rgba(56, 189, 248, 0.12);
+  stroke: #38bdf8;
+  stroke-width: 1.5;
+}
+
+.wuling-fraction-plan .is-merge {
+  stroke: #38bdf8;
+}
+
+.wuling-fraction-plan text {
+  fill: var(--text2);
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.wuling-fraction-plan text.is-flow {
+  paint-order: stroke;
+  stroke: rgba(9, 9, 11, 0.9);
+  stroke-width: 3;
+}
+
+.wuling-fraction-plan text.is-input-label {
+  fill: var(--text3);
+}
+
+.wuling-fraction-plan text.is-use-label {
+  fill: var(--accent);
+}
+
+.wuling-fraction-plan text.is-carry-label {
+  fill: var(--text3);
+}
+
+.wuling-fraction-plan text.is-rest-label {
+  fill: #38bdf8;
+}
+
+.wuling-fraction-plan-steps {
+  border-top: 1px solid var(--border-inner);
+  display: grid;
+  gap: 0.18rem;
+  margin-top: 0.35rem;
+  padding-top: 0.38rem;
+}
+
+.wuling-fraction-plan-steps p {
+  align-items: center;
+  color: var(--text2);
+  display: flex;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.wuling-fraction-plan-steps b {
+  align-items: center;
+  background: rgba(223, 209, 20, 0.12);
+  border: 1px solid rgba(223, 209, 20, 0.32);
+  border-radius: 999px;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 0.55rem;
+  height: 1rem;
+  justify-content: center;
+  width: 1rem;
+}
+
+.wuling-fraction-plan-steps span {
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 800;
+}

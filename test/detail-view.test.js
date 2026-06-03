@@ -1,6 +1,41 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+globalThis.WulingI18n = {
+  t: (key) => ({
+    "panel.resourceFacilityUsage": "Resource & Facility Usage",
+    "detail.title": "Selected Candidate",
+    "detail.apply": "Apply to Production",
+    "detail.openEndfieldCalc": "Open in endfield-calc",
+    "detail.close": "Close",
+    "detail.billComposition": "Bill composition",
+    "detail.bill.final": "Final",
+    "detail.bill.deduct": "Deduct",
+    "detail.bill.adjustLoss": "Adjust loss",
+    "detail.bill.adjustGain": "Adjust gain",
+    "detail.bill.header.item": "Item",
+    "detail.bill.header.design": "Design",
+    "detail.bill.header.deduct": "Deduct",
+    "detail.bill.header.adjust": "Adjust",
+    "detail.bill.header.final": "Final",
+    "detail.bill.header.bill": "Bill",
+    "detail.splitter.title": "Fraction splitter guide",
+    "detail.splitter.mode": "Splitter mode",
+    "detail.splitter.item": "Item",
+    "detail.splitter.facility": "Facility",
+    "detail.splitter.output": "Output",
+    "detail.splitter.perUnit": "Per unit",
+    "detail.splitter.units": "Units",
+    "detail.splitter.split": "Split",
+    "detail.splitter.splitMerge": "S / C",
+    "detail.splitter.splitMergeTitle": "Splitters / Convergers",
+    "detail.splitter.empty": "No fractional final recipe units in the exchange-only design.",
+    "detail.usage.emptyRaw": "No raw resource limits.",
+    "detail.usage.noFacilities": "No facility usage.",
+    "detail.usage.facilities": "Facilities",
+  }[key] ?? key),
+};
+
 await import("../src/ui/detail-helpers.js");
 await import("../src/ui/detail-export.js");
 await import("../src/ui/detail.js");

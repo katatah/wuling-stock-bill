@@ -1,6 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+globalThis.WulingI18n = {
+  t: (key) => ({
+    "candidate.title": "Candidates",
+    "candidate.status.notGenerated": "not generated",
+    "candidate.status.rows": "{rows} rows",
+    "candidate.header.bills": "Bills",
+    "candidate.header.transfer": "Transfer",
+    "candidate.empty": "Candidate generation will appear here.",
+    "candidate.applyTitle": "Double-click to apply this candidate to Production",
+    "candidate.afterDeductions": "After deductions",
+  }[key] ?? key),
+};
+
 await import("../src/scenario/candidate-engine.js");
 await import("../src/ui/candidate.js");
 
