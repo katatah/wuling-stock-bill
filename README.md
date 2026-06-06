@@ -9,15 +9,8 @@ Bills while still being practical to build.
 
 ## What It Helps With
 
-- Explore recovery plans when Wuling Stock Bill exchanges are missed, delayed,
-  or cannot be completed as planned.
-- Compare Wuling Stock Bill production candidates side by side.
-- Check raw resource and facility usage for each candidate.
-- See how battery and equipment-part deductions change the final bill amount.
-- Inspect facility mix, shared material usage, and fraction splitter hints.
-- Apply a candidate back to the Production panel for small manual adjustments.
-- Open the selected production rates in endfield-calc for a deeper factory
-  check.
+- Explore recovery plans for missed Wuling Stock Bill exchanges, or evaluate changes to material stocking rates and their feasibility.
+- Help customize imported shared blueprints by surfacing subtle but important issues, such as long-term material changes and competition for lower-tier materials.
 
 ## How To Use
 
